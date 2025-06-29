@@ -768,14 +768,6 @@ main() {
     echo "Пароль пользователя: $NEW_USER_PASSWORD"
 
     # Красивое напоминание
-    # echo -e "\n\033[1;36m=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===\033[0m"
-    # echo -e "\033[1;33mСледующие домены нужно перенаправить на новый IP ($DEST_HOST):\033[0m"
-
-    # for domain in $DOMAINS_TO_UPDATE; do
-    #     echo -e "  • \033[1;32m$domain\033[0m"
-    # done
-
-    # echo -e "\n\033[1;31m❗ Это важно сделать сразу после миграции!\033[0m\n"
     if [ "$DEBUG" = "True" ] || [ "$RUN_UPDATE_DNS_RECORDS" = "False" ] || [ "$DNS_UPDATED" = "false" ]; then
         echo -e "\n\033[1;36m=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===\033[0m"
         echo -e "\033[1;33mСледующие домены нужно перенаправить на новый IP ($DEST_HOST):\033[0m"
