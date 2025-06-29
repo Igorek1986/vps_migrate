@@ -44,6 +44,7 @@ check_required_files() {
     required_vars=(
         "SOURCE_HOST" "DEST_HOST" "DEST_ROOT_PASSWORD" 
         "NEW_USER" "NEW_USER_PASSWORD" "DOMAINS_TO_UPDATE" 
+        "BEGET_LOGIN" "BEGET_PASSWORD"
         "DEBUG"
         # Флаги выполнения функций
         "RUN_SETUP_SSH_KEYS" "RUN_CREATE_USER" "RUN_INSTALL_BASE_PACKAGES"
@@ -51,6 +52,7 @@ check_required_files() {
         "RUN_INSTALL_LAMPAC" "RUN_TRANSFER_NGINX_CERTS" "RUN_SETUP_MARZBAN"
         "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_NUMPARSER"
         "RUN_SETUP_MOVIES_API" "RUN_SETUP_3PROXY" "RUN_SETUP_GLANCES"
+        "RUN_UPDATE_DNS_RECORDS"
         "RUN_CLEANUP"
     )
     for var in "${required_vars[@]}"; do
@@ -216,7 +218,7 @@ install_base_packages() {
     echo "Устанавливаем базовые пакеты"
     
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt update && sudo apt upgrade -y"
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt-get install -y zsh tree redis-server nginx zlib1g-dev libbz2-dev libreadline-dev llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev liblzma-dev python3-dev python3-lxml libxslt-dev libffi-dev libssl-dev gnumeric libsqlite3-dev libpq-dev libxml2-dev libxslt1-dev libjpeg-dev libfreetype6-dev libcurl4-openssl-dev supervisor libevent-dev yacc unzip net-tools pipx"
+    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt-get install -y zsh tree redis-server nginx zlib1g-dev libbz2-dev libreadline-dev llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev liblzma-dev python3-dev python3-lxml libxslt-dev libffi-dev libssl-dev gnumeric libsqlite3-dev libpq-dev libxml2-dev libxslt1-dev libjpeg-dev libfreetype6-dev libcurl4-openssl-dev supervisor libevent-dev yacc unzip net-tools pipx jq"
     
     # Установка Docker
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh && rm get-docker.sh"
@@ -673,19 +675,48 @@ update_dns_records() {
     local encoded_password
     encoded_password=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BEGET_PASSWORD'))")
 
+    local all_success=true
+
     for domain in $DOMAINS_TO_UPDATE; do
         echo "Обновляем A-запись для $domain..."
 
-        # Закодированный JSON для API
-        local input_data
-        input_data=$(python3 -c "import urllib.parse, json; print(urllib.parse.quote(json.dumps({'fqdn': '$domain', 'records': {'A': [{'priority': 10, 'value': '$DEST_HOST'}]}}))")
+        # Формируем JSON и кодируем его
+        local json_data="{\"fqdn\":\"$domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$DEST_HOST\"}]}}"
+        local encoded_data
+        encoded_data=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$json_data")
 
         # Выполняем запрос к API Beget
         local response
-        response=$(curl -s "https://api.beget.com/api/dns/changeRecords?login=$encoded_login&passwd=$encoded_password&input_format=json&output_format=json&input_data=$input_data")
+        response=$(curl -s "https://api.beget.com/api/dns/changeRecords?login=$encoded_login&passwd=$encoded_password&input_format=json&output_format=json&input_data=$encoded_data")
 
         echo "Ответ API: $response"
+
+        # Проверяем успешность
+        if ! echo "$response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null; then
+            all_success=false
+            echo "Ошибка при обновлении DNS для $domain" >&2
+        fi
+
+        # Обновляем www-поддомен
+        local www_domain="www.$domain"
+        echo "Обновляем A-запись для $www_domain..."
+        local www_json_data="{\"fqdn\":\"$www_domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$DEST_HOST\"}]}}"
+        local www_encoded_data
+        www_encoded_data=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$www_json_data")
+
+        local www_response
+        www_response=$(curl -s "https://api.beget.com/api/dns/changeRecords?login=$encoded_login&passwd=$encoded_password&input_format=json&output_format=json&input_data=$www_encoded_data")
+
+        echo "Ответ API для www: $www_response"
+
+        if ! echo "$www_response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null; then
+            all_success=false
+            echo "Ошибка при обновлении DNS для $www_domain" >&2
+        fi
     done
+
+    # Возвращаем статус через глобальную переменную
+    DNS_UPDATED=$all_success
 }
 
 main() {
@@ -737,14 +768,25 @@ main() {
     echo "Пароль пользователя: $NEW_USER_PASSWORD"
 
     # Красивое напоминание
-    echo -e "\n\033[1;36m=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===\033[0m"
-    echo -e "\033[1;33mСледующие домены нужно перенаправить на новый IP ($DEST_HOST):\033[0m"
+    # echo -e "\n\033[1;36m=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===\033[0m"
+    # echo -e "\033[1;33mСледующие домены нужно перенаправить на новый IP ($DEST_HOST):\033[0m"
 
-    for domain in $DOMAINS_TO_UPDATE; do
-        echo -e "  • \033[1;32m$domain\033[0m"
-    done
+    # for domain in $DOMAINS_TO_UPDATE; do
+    #     echo -e "  • \033[1;32m$domain\033[0m"
+    # done
 
-    echo -e "\n\033[1;31m❗ Это важно сделать сразу после миграции!\033[0m\n"
+    # echo -e "\n\033[1;31m❗ Это важно сделать сразу после миграции!\033[0m\n"
+    if [ "$DEBUG" = "True" ] || [ "$RUN_UPDATE_DNS_RECORDS" = "False" ] || [ "$DNS_UPDATED" = "false" ]; then
+        echo -e "\n\033[1;36m=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===\033[0m"
+        echo -e "\033[1;33mСледующие домены нужно перенаправить на новый IP ($DEST_HOST):\033[0m"
+
+        for domain in $DOMAINS_TO_UPDATE; do
+            echo -e "  • \033[1;32m$domain\033[0m"
+            echo -e "  • \033[1;32mwww.$domain\033[0m"
+        done
+
+        echo -e "\n\033[1;31m❗ Это важно сделать сразу после миграции!\033[0m\n"
+    fi
 }
 
 main "$@"
