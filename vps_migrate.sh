@@ -40,8 +40,6 @@ check_required_files() {
     
     source migrate.env
     
-    # local required_vars=("SOURCE_HOST" "DEST_HOST" "DEST_ROOT_PASSWORD" "NEW_USER" "NEW_USER_PASSWORD" "DOMAINS_TO_UPDATE" "DEBUG")
-
     # Обязательные переменные
     required_vars=(
         "SOURCE_HOST" "DEST_HOST" "DEST_ROOT_PASSWORD" 
@@ -660,6 +658,36 @@ cleanup() {
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt autoremove -y"
 }
 
+update_dns_records() {
+    if [ "$DEBUG" = "True" ]; then
+        echo -e "\n\033[33m=== ПРОПУСК: Обновление DNS (режим отладки) ===\033[0m"
+        return 0
+    fi
+
+    echo -e "\n\033[1;34m=== ОБНОВЛЕНИЕ DNS ЗАПИСЕЙ ===\033[0m"
+    echo "Используем IP из DEST_HOST: $DEST_HOST"
+
+    # Кодируем логин и пароль для URL
+    local encoded_login
+    encoded_login=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BEGET_LOGIN'))")
+    local encoded_password
+    encoded_password=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BEGET_PASSWORD'))")
+
+    for domain in $DOMAINS_TO_UPDATE; do
+        echo "Обновляем A-запись для $domain..."
+
+        # Закодированный JSON для API
+        local input_data
+        input_data=$(python3 -c "import urllib.parse, json; print(urllib.parse.quote(json.dumps({'fqdn': '$domain', 'records': {'A': [{'priority': 10, 'value': '$DEST_HOST'}]}}))")
+
+        # Выполняем запрос к API Beget
+        local response
+        response=$(curl -s "https://api.beget.com/api/dns/changeRecords?login=$encoded_login&passwd=$encoded_password&input_format=json&output_format=json&input_data=$input_data")
+
+        echo "Ответ API: $response"
+    done
+}
+
 main() {
     # echo "=== Начало миграции VPS ==="
     echo -e "\033[1;35m\n=== НАЧАЛО МИГРАЦИИ VPS ===\033[0m"
@@ -693,38 +721,13 @@ main() {
     run_if_enabled "setup_3proxy"
     run_if_enabled "setup_glances"
 
+    # Обновление DNS только в production-режиме
+    if [ "$DEBUG" = "False" ]; then
+        run_if_enabled "update_dns_records"
+    fi
+
     # Очистка
     run_if_enabled "cleanup"
-
-    
-    # setup_ssh_keys
-    # create_user
-    
-    # # Базовые настройки
-    # install_base_packages
-    # setup_oh_my_zsh
-    # install_pyenv
-    # install_poetry
-    
-    # # Установка от root
-    # install_lampac
-    # transfer_nginx_certs
-    # setup_marzban
-
-
-    
-    # # Установка от пользователя
-    # install_go
-    # setup_antizapret
-    # # setup_numparser
-    # # setup_movies_api
-    # setup_3proxy
-    # setup_glances
-    
-    # cleanup
-
-    # # Установка от root
-    # # setup_marzban
 
     echo ""
     # echo "=== Миграция успешно завершена! ==="
