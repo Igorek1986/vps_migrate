@@ -5,6 +5,24 @@
 # ✅ ❌ 🚀 ⚠️ ▶️ 🕐 ⏹️ ⏳
 set -e
 
+# Цветовые коды
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[1;34m'
+PURPLE='\033[1;35m'
+CYAN='\033[1;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
+
+# Цветовые коды для ошибок и предупреждений
+ERROR_COLOR=$RED
+WARNING_COLOR=$YELLOW
+SUCCESS_COLOR=$GREEN
+INFO_COLOR=$BLUE
+HEADER_COLOR=$PURPLE
+HIGHLIGHT_COLOR=$CYAN
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -34,7 +52,7 @@ check_required_files() {
     [ ! -f "numparser_config.yml" ] && missing_files+=("numparser_config.yml")
     
     if [ ${#missing_files[@]} -ne 0 ]; then
-        echo "Отсутствуют необходимые файлы: ${missing_files[*]}"
+        echo -e "${ERROR_COLOR}Отсутствуют необходимые файлы: ${missing_files[*]}${NC}"
         exit 1
     fi
     
@@ -57,7 +75,7 @@ check_required_files() {
     )
     for var in "${required_vars[@]}"; do
         if [ -z "${!var}" ]; then
-            echo "Не задана переменная $var в migrate.env"
+            echo -e "${ERROR_COLOR}Не задана переменная $var в migrate.env${NC}"
             exit 1
         fi
     done
@@ -75,10 +93,10 @@ run_if_enabled() {
     local flag_name="RUN_$(echo $func_name | tr '[:lower:]' '[:upper:]')"
     
     if [ "${!flag_name}" = "True" ]; then
-        echo -e "\n\033[1;34m=== ВЫПОЛНЕНИЕ: ${func_name} ===\033[0m"
+        echo -e "\n${INFO_COLOR}=== ВЫПОЛНЕНИЕ: ${func_name} ===${NC}"
         $func_name
     else
-        echo -e "\n\033[33m=== ПРОПУСК: ${func_name} (отключено в конфиге) ===\033[0m"
+        echo -e "\n${WARNING_COLOR}=== ПРОПУСК: ${func_name} (отключено в конфиге) ===${NC}"
     fi
 }
 
@@ -97,7 +115,7 @@ safe_ssh() {
     
     # Проверяем статус выполнения
     if [ $? -ne 0 ]; then
-        echo "Ошибка выполнения команды на $host: $command" >&2
+        echo -e "${ERROR_COLOR}Ошибка выполнения команды на $host: $command${NC}" >&2
         return 1
     fi
 }
@@ -109,7 +127,7 @@ safe_sshpass() {
 
     sshpass -p "$password" ssh -o StrictHostKeyChecking=no "$host" "$command"
     if [ $? -ne 0 ]; then
-        echo "Ошибка выполнения команды на $host: $command" >&2
+        echo -e "${ERROR_COLOR}Ошибка выполнения команды на $host: $command${NC}" >&2
         return 1
     fi
 }
@@ -160,28 +178,25 @@ setup_ssh_keys() {
 
     check_sshpass
 
-
     # Очищаем known_hosts перед подключением
     echo "Очищаем known_hosts"
     ssh-keygen -f "$HOME/.ssh/known_hosts" -R "$DEST_HOST" >/dev/null 2>&1
     
-    
     # if ! safe_ssh "root@$DEST_HOST" "echo 'Тестовое подключение'"; then
     if ! safe_sshpass "root@$DEST_HOST" "echo 'Тестовое подключение'" "$DEST_ROOT_PASSWORD"; then
-        echo "Не удалось установить SSH-соединение с $DEST_HOST" >&2
+        echo -e "${ERROR_COLOR}Не удалось установить SSH-соединение с $DEST_HOST${NC}" >&2
         exit 1
     fi
        
-    
     if ! ping -c 1 "$DEST_HOST" &> /dev/null; then
-        echo "Ошибка: сервер $DEST_HOST недоступен"
+        echo -e "${ERROR_COLOR}Ошибка: сервер $DEST_HOST недоступен${NC}"
         exit 1
     fi
     
     if ! sshpass -p "$DEST_ROOT_PASSWORD" ssh-copy-id -i "$SSH_PUB_KEY" -o StrictHostKeyChecking=no root@"$DEST_HOST"; then
         echo "Пробуем альтернативный метод копирования ключа..."
         if ! ssh -o PasswordAuthentication=yes -o PubkeyAuthentication=no root@"$DEST_HOST" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo $(cat $SSH_PUB_KEY) >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"; then
-            echo "Ошибка при копировании SSH ключа"
+            echo -e "${ERROR_COLOR}Ошибка при копировании SSH ключа${NC}"
             exit 1
         fi
     fi
@@ -191,7 +206,7 @@ setup_ssh_keys() {
     if ssh -i "$SSH_KEY" root@"$DEST_HOST" "systemctl restart sshd.service 2>/dev/null || systemctl restart ssh.service"; then
         echo "SSH служба перезапущена"
     else
-        echo "Предупреждение: не удалось перезапустить SSH службу"
+        echo -e "${WARNING_COLOR}Предупреждение: не удалось перезапустить SSH службу${NC}"
     fi
 }
 
@@ -430,7 +445,7 @@ setup_numparser() {
     # Переходим в директорию и собираем
     cd NUMParser && \
     go build -o NUMParser_deb ./cmd || {
-        echo 'ОШИБКА сборки NUMParser';
+        echo -e '${ERROR_COLOR}ОШИБКА сборки NUMParser${NC}';
         echo 'Проверьте путь к Go:';
         which go;
         exit 1;
@@ -468,7 +483,7 @@ setup_movies_api() {
         cd movies-api
         export PATH=\"/home/$NEW_USER/.local/bin:\$PATH\"
         /home/$NEW_USER/.local/bin/poetry install --no-root || {
-            echo 'Ошибка установки зависимостей!'
+            echo -e '${ERROR_COLOR}Ошибка установки зависимостей!${NC}'
             exit 1
         }
     "
@@ -547,7 +562,6 @@ setup_marzban() {
         INSTALL_PID=$!
         echo "install complete"
 
-
         # Проверяем статус Marzban каждые 5 секунд без ограничения времени
         while true; do
             STATUS=$(marzban status | sed "s/\x1b\[[0-9;]*m//g" | grep "^Status:" | awk "{print \$2}")
@@ -573,7 +587,6 @@ setup_marzban() {
         fi
     '
 
-
     # 2. Копирование данных через временную папку
     echo "Подготавливаем данные для переноса..."
     LOCAL_TEMP_DIR=$(mktemp -d)
@@ -583,7 +596,7 @@ setup_marzban() {
     rsync -avz -e "ssh -i $SSH_KEY" \
         root@"$SOURCE_HOST":/var/lib/marzban/ \
         "$LOCAL_TEMP_DIR/marzban_data/" || {
-            echo "Ошибка копирования данных Marzban" >&2
+            echo -e "${ERROR_COLOR}Ошибка копирования данных Marzban${NC}" >&2
             rm -rf "$LOCAL_TEMP_DIR"
             return 1
         }
@@ -593,7 +606,7 @@ setup_marzban() {
     rsync -avz -e "ssh -i $SSH_KEY" \
         root@"$SOURCE_HOST":/opt/marzban/.env \
         "$LOCAL_TEMP_DIR/.env" || {
-            echo "Ошибка копирования .env файла" >&2
+            echo -e "${ERROR_COLOR}Ошибка копирования .env файла${NC}" >&2
             rm -rf "$LOCAL_TEMP_DIR"
             return 1
         }
@@ -603,18 +616,18 @@ setup_marzban() {
     rsync -avz -e "ssh -i $SSH_KEY" \
         "$LOCAL_TEMP_DIR/marzban_data/" \
         root@"$DEST_HOST":/var/lib/marzban/ || {
-            echo "Ошибка переноса данных" >&2
+            echo -e "${ERROR_COLOR}Ошибка переноса данных${NC}" >&2
             rm -rf "$LOCAL_TEMP_DIR"
             return 1
         }
 
     if [ "$DEBUG" = "True" ]; then
-        echo -e "\n\033[1;31m❗ Режим отладки\033[0m\n"
+        echo -e "\n${ERROR_COLOR}❗ Режим отладки${NC}\n"
     else
         rsync -avz -e "ssh -i $SSH_KEY" \
             "$LOCAL_TEMP_DIR/.env" \
             root@"$DEST_HOST":/opt/marzban/.env || {
-                echo "Ошибка переноса .env файла" >&2
+                echo -e "${ERROR_COLOR}Ошибка переноса .env файла${NC}" >&2
                 rm -rf "$LOCAL_TEMP_DIR"
                 return 1
             }
@@ -624,7 +637,7 @@ setup_marzban() {
     rm -rf "$LOCAL_TEMP_DIR"
 
     if [ "$DEBUG" = "True" ]; then
-        echo -e "\n\033[1;31m❗ Режим отладки\033[0m\n"
+        echo -e "\n${ERROR_COLOR}❗ Режим отладки${NC}\n"
     else
         echo "Останавливаем Marzban на исходном сервере..."
         ssh -i "$SSH_KEY" root@"$SOURCE_HOST" "marzban down"
@@ -662,11 +675,11 @@ cleanup() {
 
 update_dns_records() {
     if [ "$DEBUG" = "True" ]; then
-        echo -e "\n\033[33m=== ПРОПУСК: Обновление DNS (режим отладки) ===\033[0m"
+        echo -e "\n${WARNING_COLOR}=== ПРОПУСК: Обновление DNS (режим отладки) ===${NC}"
         return 0
     fi
 
-    echo -e "\n\033[1;34m=== ОБНОВЛЕНИЕ DNS ЗАПИСЕЙ ===\033[0m"
+    echo -e "\n${INFO_COLOR}=== ОБНОВЛЕНИЕ DNS ЗАПИСЕЙ ===${NC}"
     echo "Используем IP из DEST_HOST: $DEST_HOST"
 
     # Кодируем логин и пароль для URL
@@ -694,7 +707,7 @@ update_dns_records() {
         # Проверяем успешность
         if ! echo "$response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null; then
             all_success=false
-            echo "Ошибка при обновлении DNS для $domain" >&2
+            echo -e "${ERROR_COLOR}Ошибка при обновлении DNS для $domain${NC}" >&2
         fi
 
         # Обновляем www-поддомен
@@ -711,7 +724,7 @@ update_dns_records() {
 
         if ! echo "$www_response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null; then
             all_success=false
-            echo "Ошибка при обновлении DNS для $www_domain" >&2
+            echo -e "${ERROR_COLOR}Ошибка при обновлении DNS для $www_domain${NC}" >&2
         fi
     done
 
@@ -721,7 +734,7 @@ update_dns_records() {
 
 main() {
     # echo "=== Начало миграции VPS ==="
-    echo -e "\033[1;35m\n=== НАЧАЛО МИГРАЦИИ VPS ===\033[0m"
+    echo -e "${HEADER_COLOR}\n=== НАЧАЛО МИГРАЦИИ VPS ===${NC}"
     check_required_files
     
     echo "Источник: $SOURCE_HOST"
@@ -762,22 +775,22 @@ main() {
 
     echo ""
     # echo "=== Миграция успешно завершена! ==="
-    echo -e "\033[1;35m\n=== МИГРАЦИЯ ЗАВЕРШЕНА ===\033[0m"
+    echo -e "${HEADER_COLOR}\n=== МИГРАЦИЯ ЗАВЕРШЕНА ===${NC}"
     echo "Доступ к серверу:"
     echo "SSH: ssh -i $SSH_KEY $NEW_USER@$DEST_HOST"
     echo "Пароль пользователя: $NEW_USER_PASSWORD"
 
     # Красивое напоминание
     if [ "$DEBUG" = "True" ] || [ "$RUN_UPDATE_DNS_RECORDS" = "False" ] || [ "$DNS_UPDATED" = "false" ]; then
-        echo -e "\n\033[1;36m=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===\033[0m"
-        echo -e "\033[1;33mСледующие домены нужно перенаправить на новый IP ($DEST_HOST):\033[0m"
+        echo -e "\n${HIGHLIGHT_COLOR}=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===${NC}"
+        echo -e "${WARNING_COLOR}Следующие домены нужно перенаправить на новый IP ($DEST_HOST):${NC}"
 
         for domain in $DOMAINS_TO_UPDATE; do
-            echo -e "  • \033[1;32m$domain\033[0m"
-            echo -e "  • \033[1;32mwww.$domain\033[0m"
+            echo -e "  • ${SUCCESS_COLOR}$domain${NC}"
+            echo -e "  • ${SUCCESS_COLOR}www.$domain${NC}"
         done
 
-        echo -e "\n\033[1;31m❗ Это важно сделать сразу после миграции!\033[0m\n"
+        echo -e "\n${ERROR_COLOR}❗ Это важно сделать сразу после миграции!${NC}\n"
     fi
 }
 
