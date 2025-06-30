@@ -3,3 +3,5 @@ id_rsa
 id_rsa.pub
 numparser_config.yml
 movies-api.env
+backups/
+.DS_Store
