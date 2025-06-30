@@ -238,6 +238,9 @@ install_base_packages() {
     # Установка Docker
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh && rm get-docker.sh"
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo usermod -aG docker $NEW_USER"
+
+    # Установка certbot
+    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo snap install --classic certbot"
 }
 
 setup_oh_my_zsh() {
@@ -353,6 +356,32 @@ EOF
 install_lampac() {
     echo "Устанавливаем Lampac из-под root"
     ssh -i "$SSH_KEY" root@"$DEST_HOST" "curl -L -k -s https://lampac.sh | bash"
+
+    # Создаем временную папку локально
+    LOCAL_TEMP_DIR=$(mktemp -d)
+
+    echo "Копируем файлы с исходного сервера..."
+    rsync -avz --relative -e "ssh -i $SSH_KEY" \
+    root@"$SOURCE_HOST":/./home/lampac/{module/manifest.json,init.conf,users.json,wwwroot/profileIcons,plugins/lampainit.my.js,plugins/privateinit.my.js,cache/storage,wwwroot/my_plugins,passwd} \
+    "$LOCAL_TEMP_DIR"
+
+
+    echo "Копируем файлы на целевой сервер..."
+    rsync -avz -e "ssh -i $SSH_KEY" \
+        "$LOCAL_TEMP_DIR/home/lampac/" \
+        root@"$DEST_HOST":/home/lampac/ || {
+        echo "Ошибка при копировании файлов на целевой сервер"
+        return 1
+    }
+
+    # Очищаем временные файлы
+    rm -rf "$LOCAL_TEMP_DIR" || {
+        echo "Не удалось удалить временные файлы"
+        return 1
+    }
+
+    echo "Перенос Lampac завершен успешно"
+    return 0
 }
 
 setup_antizapret() {
@@ -435,6 +464,12 @@ EOF
 
 setup_numparser() {
     echo "Настраиваем NUMParser"
+
+    # Создаем временную директорию
+    mkdir -p "$LOCAL_TEMP_DIR/numparser_data" || {
+        echo "Не удалось создать временную директорию"
+        return 1
+    }
     
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "git clone https://github.com/Igorek1986/NUMParser.git || true"
     scp -i "$SSH_KEY" numparser_config.yml $NEW_USER@"$DEST_HOST":/home/$NEW_USER/NUMParser/config.yml
@@ -469,6 +504,13 @@ User=$NEW_USER
 WantedBy=multi-user.target
 EOF'"
     
+    # Копируем файлы с исходного сервера на локальную машину
+    rsync -avz -e "ssh -i $SSH_KEY" $NEW_USER@"$SOURCE_HOST":/home/$NEW_USER/NUMParser/db/numparser.db "$LOCAL_TEMP_DIR/numparser_data"
+    rsync -avz -e "ssh -i $SSH_KEY" "$LOCAL_TEMP_DIR/numparser_data/numparser.db" $NEW_USER@"$DEST_HOST":/home/$NEW_USER/NUMParser/db/
+    
+    # Очищаем временную папку
+    rm -rf "$LOCAL_TEMP_DIR"
+
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start numparser && sudo systemctl enable numparser"
 }
 
