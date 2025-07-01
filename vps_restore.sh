@@ -25,36 +25,6 @@ clear_known_hosts() {
     sed -i.bak "/$host/d" ~/.ssh/known_hosts 2>/dev/null || true
 }
 
-# # Проверка подключения с автоматическим принятием нового ключа
-# check_connection() {
-#     local host="$1"
-#     local password="$2"
-    
-#     clear_known_hosts "$host"
-    
-#     # Пробуем подключиться с автоматическим принятием ключа
-#     if ! ssh -o StrictHostKeyChecking=accept-new -i "$SSH_KEY" root@"$host" "echo 'Подключение успешно'"; then
-#         echo -e "${YELLOW}Не удалось подключиться по SSH ключу, пробуем с паролем...${NC}"
-        
-#         if ! sshpass -p "$password" ssh -o StrictHostKeyChecking=accept-new root@"$host" "echo 'Подключение с паролем успешно'"; then
-#             echo -e "${RED}Не удалось подключиться к $host${NC}" >&2
-#             return 1
-#         fi
-        
-#         # Копируем ключ если подключились по паролю
-#         echo "Копируем SSH ключ на сервер..."
-#         sshpass -p "$password" ssh-copy-id -i "$SSH_KEY" -o StrictHostKeyChecking=no root@"$host" || {
-#             echo "Альтернативный метод копирования ключа..."
-#             sshpass -p "$password" ssh root@"$host" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo $(cat $SSH_PUB_KEY) >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" || {
-#                 echo -e "${RED}Ошибка при копировании SSH ключа${NC}"
-#                 return 1
-#             }
-#         }
-#     fi
-    
-#     return 0
-# }
-
 # Проверка и установка sshpass
 check_sshpass() {
     if ! command -v sshpass &> /dev/null; then
@@ -226,41 +196,6 @@ EOF
     "
 }
 
-# setup_ssh_keys() {
-#     echo "Настраиваем SSH доступ на целевом сервере ($DEST_HOST)"
-
-#     check_sshpass
-
-#     # Очищаем known_hosts перед подключением
-#     echo "Очищаем known_hosts"
-#     ssh-keygen -f "$HOME/.ssh/known_hosts" -R "$DEST_HOST" >/dev/null 2>&1
-    
-#     if ! safe_sshpass "root@$DEST_HOST" "echo 'Тестовое подключение'" "$DEST_ROOT_PASSWORD"; then
-#         echo -e "${ERROR_COLOR}Не удалось установить SSH-соединение с $DEST_HOST${NC}" >&2
-#         exit 1
-#     fi
-       
-#     if ! ping -c 1 "$DEST_HOST" &> /dev/null; then
-#         echo -e "${ERROR_COLOR}Ошибка: сервер $DEST_HOST недоступен${NC}"
-#         exit 1
-#     fi
-    
-#     if ! sshpass -p "$DEST_ROOT_PASSWORD" ssh-copy-id -i "$SSH_PUB_KEY" -o StrictHostKeyChecking=no root@"$DEST_HOST"; then
-#         echo "Пробуем альтернативный метод копирования ключа..."
-#         if ! ssh -o PasswordAuthentication=yes -o PubkeyAuthentication=no root@"$DEST_HOST" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo $(cat $SSH_PUB_KEY) >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"; then
-#             echo -e "${ERROR_COLOR}Ошибка при копировании SSH ключа${NC}"
-#             exit 1
-#         fi
-#     fi
-    
-#     # Пробуем оба варианта имени службы SSH
-#     ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
-#     if ssh -i "$SSH_KEY" root@"$DEST_HOST" "systemctl restart sshd.service 2>/dev/null || systemctl restart ssh.service"; then
-#         echo "SSH служба перезапущена"
-#     else
-#         echo -e "${WARNING_COLOR}Предупреждение: не удалось перезапустить SSH службу${NC}"
-#     fi
-# }
 setup_ssh_keys() {
     echo "Настраиваем SSH доступ на целевом сервере ($DEST_HOST)"
 
@@ -289,8 +224,6 @@ setup_ssh_keys() {
         fi
     fi
     
-    # # Пробуем оба варианта имени службы SSH
-    # ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
     # Отключаем парольную аутентификацию и настраиваем root-доступ только по ключу
     ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
     ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config"
@@ -841,20 +774,9 @@ main() {
     check_required_files
     check_arguments "$@"
     
-    # # Проверка подключения с обработкой изменения ключа
-    # if ! check_connection "$DEST_HOST" "$DEST_ROOT_PASSWORD"; then
-    #     exit 1
-    # fi
-
     # Дальнейшие операции восстановления
     run_if_enabled "setup_ssh_keys"
-
-    # echo -e "${HEADER_COLOR}\n=== НАЧАЛО ВОССТАНОВЛЕНИЯ VPS ИЗ БЭКАПА ===${NC}"
-    
-    # check_sshpass
-    # check_required_files
-    # check_arguments "$@"
-    
+ 
     # Проверка подключения к целевому серверу
     if ! safe_sshpass "root@$DEST_HOST" "echo 'Тестовое подключение'" "$DEST_ROOT_PASSWORD"; then
         echo -e "${ERROR_COLOR}Не удалось подключиться к $DEST_HOST${NC}" >&2
