@@ -289,8 +289,19 @@ setup_ssh_keys() {
         fi
     fi
     
-    # Пробуем оба варианта имени службы SSH
+    # # Пробуем оба варианта имени службы SSH
+    # ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
+    # Отключаем парольную аутентификацию и настраиваем root-доступ только по ключу
     ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config"
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config"
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "sed -i 's/^#*UsePAM.*/UsePAM no/' /etc/ssh/sshd_config"
+
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "
+    sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config.d/50-cloud-init.conf || \
+    rm -f /etc/ssh/sshd_config.d/50-cloud-init.conf
+    "
+    
     if ssh -i "$SSH_KEY" root@"$DEST_HOST" "systemctl restart sshd.service 2>/dev/null || systemctl restart ssh.service"; then
         echo "SSH служба перезапущена"
     else
