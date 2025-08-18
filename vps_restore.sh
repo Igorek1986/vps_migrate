@@ -48,7 +48,7 @@ check_required_files() {
     [ ! -f "numparser_config.yml" ] && missing_files+=("numparser_config.yml")
     
     if [ ${#missing_files[@]} -ne 0 ]; then
-        echo -e "${ERROR_COLOR}Отсутствуют необходимые файлы: ${missing_files[*]}${NC}"
+        echo -e "${RED}Отсутствуют необходимые файлы: ${missing_files[*]}${NC}"
         exit 1
     fi
     
@@ -66,12 +66,13 @@ check_required_files() {
         "RUN_INSTALL_LAMPAC" "RUN_TRANSFER_NGINX_CERTS" "RUN_SETUP_MARZBAN"
         "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_NUMPARSER"
         "RUN_SETUP_MOVIES_API" "RUN_SETUP_3PROXY" "RUN_SETUP_GLANCES"
+        "RUN_SETUP_FAIL2BAN"  # Добавлен флаг для fail2ban
         "RUN_UPDATE_DNS_RECORDS"
         "RUN_CLEANUP"
     )
     for var in "${required_vars[@]}"; do
         if [ -z "${!var}" ]; then
-            echo -e "${ERROR_COLOR}Не задана переменная $var в migrate.env${NC}"
+            echo -e "${RED}Не задана переменная $var в migrate.env${NC}"
             exit 1
         fi
     done
@@ -89,10 +90,10 @@ run_if_enabled() {
     local flag_name="RUN_$(echo $func_name | tr '[:lower:]' '[:upper:]')"
     
     if [ "${!flag_name}" = "True" ]; then
-        echo -e "\n${INFO_COLOR}=== ВЫПОЛНЕНИЕ: ${func_name} ===${NC}"
+        echo -e "\n${BLUE}=== ВЫПОЛНЕНИЕ: ${func_name} ===${NC}"
         $func_name
     else
-        echo -e "\n${WARNING_COLOR}=== ПРОПУСК: ${func_name} (отключено в конфиге) ===${NC}"
+        echo -e "\n${YELLOW}=== ПРОПУСК: ${func_name} (отключено в конфиге) ===${NC}"
     fi
 }
 
@@ -111,7 +112,7 @@ safe_ssh() {
     
     # Проверяем статус выполнения
     if [ $? -ne 0 ]; then
-        echo -e "${ERROR_COLOR}Ошибка выполнения команды на $host: $command${NC}" >&2
+        echo -e "${RED}Ошибка выполнения команды на $host: $command${NC}" >&2
         return 1
     fi
 }
@@ -123,7 +124,7 @@ safe_sshpass() {
 
     sshpass -p "$password" ssh -o StrictHostKeyChecking=no "$host" "$command"
     if [ $? -ne 0 ]; then
-        echo -e "${ERROR_COLOR}Ошибка выполнения команды на $host: $command${NC}" >&2
+        echo -e "${RED}Ошибка выполнения команды на $host: $command${NC}" >&2
         return 1
     fi
 }
@@ -131,7 +132,7 @@ safe_sshpass() {
 # Проверка аргументов
 check_arguments() {
     if [ $# -lt 1 ]; then
-        echo -e "${ERROR_COLOR}Использование: $0 <backup_path>${NC}"
+        echo -e "${RED}Использование: $0 <backup_path>${NC}"
         echo ""
         echo "Аргументы:"
         echo "  backup_path  - Путь к директории бэкапа (обязательно)"
@@ -144,11 +145,11 @@ check_arguments() {
     BACKUP_PATH="$1"
     
     if [ ! -d "$BACKUP_PATH" ]; then
-        echo -e "${ERROR_COLOR}Бэкап не найден: $BACKUP_PATH${NC}"
+        echo -e "${RED}Бэкап не найден: $BACKUP_PATH${NC}"
         exit 1
     fi
     
-    echo -e "${INFO_COLOR}Используем параметры:${NC}"
+    echo -e "${BLUE}Используем параметры:${NC}"
     echo "  Бэкап: $BACKUP_PATH"
     echo "  Сервер: $DEST_HOST"
     echo "  Пользователь: $NEW_USER"
@@ -207,19 +208,19 @@ setup_ssh_keys() {
     
     # if ! safe_ssh "root@$DEST_HOST" "echo 'Тестовое подключение'"; then
     if ! safe_sshpass "root@$DEST_HOST" "echo 'Тестовое подключение'" "$DEST_ROOT_PASSWORD"; then
-        echo -e "${ERROR_COLOR}Не удалось установить SSH-соединение с $DEST_HOST${NC}" >&2
+        echo -e "${RED}Не удалось установить SSH-соединение с $DEST_HOST${NC}" >&2
         exit 1
     fi
        
     if ! ping -c 1 "$DEST_HOST" &> /dev/null; then
-        echo -e "${ERROR_COLOR}Ошибка: сервер $DEST_HOST недоступен${NC}"
+        echo -e "${RED}Ошибка: сервер $DEST_HOST недоступен${NC}"
         exit 1
     fi
     
     if ! sshpass -p "$DEST_ROOT_PASSWORD" ssh-copy-id -i "$SSH_PUB_KEY" -o StrictHostKeyChecking=no root@"$DEST_HOST"; then
         echo "Пробуем альтернативный метод копирования ключа..."
         if ! ssh -o PasswordAuthentication=yes -o PubkeyAuthentication=no root@"$DEST_HOST" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo $(cat $SSH_PUB_KEY) >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"; then
-            echo -e "${ERROR_COLOR}Ошибка при копировании SSH ключа${NC}"
+            echo -e "${RED}Ошибка при копировании SSH ключа${NC}"
             exit 1
         fi
     fi
@@ -238,7 +239,7 @@ setup_ssh_keys() {
     if ssh -i "$SSH_KEY" root@"$DEST_HOST" "systemctl restart sshd.service 2>/dev/null || systemctl restart ssh.service"; then
         echo "SSH служба перезапущена"
     else
-        echo -e "${WARNING_COLOR}Предупреждение: не удалось перезапустить SSH службу${NC}"
+        echo -e "${YELLOW}Предупреждение: не удалось перезапустить SSH службу${NC}"
     fi
 }
 
@@ -312,7 +313,7 @@ EOF
         cp "$BACKUP_PATH/home/$NEW_USER/.zshrc" "$temp_dir/.zshrc"
         scp -i "$SSH_KEY" "$temp_dir/.zshrc" "$NEW_USER@$DEST_HOST:/home/$NEW_USER/.zshrc"
     else
-        echo -e "${WARNING_COLOR}Файл .zshrc не найден в бэкапе${NC}"
+        echo -e "${YELLOW}Файл .zshrc не найден в бэкапе${NC}"
     fi
     
     # Копируем .zprofile из бэкапа (если существует)
@@ -397,7 +398,7 @@ install_lampac() {
     if [ -d "$BACKUP_PATH/home/lampac" ]; then
         rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/home/lampac/" root@"$DEST_HOST":/home/lampac/
     else
-        echo -e "${WARNING_COLOR}Директория lampac не найдена в бэкапе${NC}"
+        echo -e "${YELLOW}Директория lampac не найдена в бэкапе${NC}"
     fi
 
     # Перезагружаем сервисы
@@ -418,7 +419,7 @@ setup_antizapret() {
         safe_ssh $NEW_USER@"$DEST_HOST" \
             "cd /home/$NEW_USER/antizapret && docker compose pull && docker compose build && docker compose up -d && docker system prune -f"
     else
-        echo -e "${WARNING_COLOR}Директория antizapret не найдена в бэкапе${NC}"
+        echo -e "${YELLOW}Директория antizapret не найдена в бэкапе${NC}"
     fi
 }
 
@@ -433,14 +434,14 @@ transfer_nginx_certs() {
     if [ -d "$BACKUP_PATH/etc/nginx/sites-available" ]; then
         rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/etc/nginx/sites-available/" root@"$DEST_HOST":/etc/nginx/sites-available/
     else
-        echo -e "${WARNING_COLOR}Директория sites-available не найдена в бэкапе${NC}"
+        echo -e "${YELLOW}Директория sites-available не найдена в бэкапе${NC}"
     fi
     
     # sites-enabled
     if [ -d "$BACKUP_PATH/etc/nginx/sites-enabled" ]; then
         rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/etc/nginx/sites-enabled/" root@"$DEST_HOST":/etc/nginx/sites-enabled/
     else
-        echo -e "${WARNING_COLOR}Директория sites-enabled не найдена в бэкапе${NC}"
+        echo -e "${YELLOW}Директория sites-enabled не найдена в бэкапе${NC}"
     fi
     
     # Сертификаты Let's Encrypt
@@ -449,7 +450,7 @@ transfer_nginx_certs() {
         safe_ssh root@"$DEST_HOST" "mkdir -p /etc/letsencrypt"
         rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/etc/letsencrypt/" root@"$DEST_HOST":/etc/letsencrypt/
     else
-        echo -e "${WARNING_COLOR}Директория letsencrypt не найдена в бэкапе${NC}"
+        echo -e "${YELLOW}Директория letsencrypt не найдена в бэкапе${NC}"
     fi
     
     # Перезагружаем Nginx
@@ -494,7 +495,7 @@ setup_numparser() {
             "$BACKUP_PATH/home/$NEW_USER/NUMParser/db/numparser.db" \
             $NEW_USER@"$DEST_HOST":/home/$NEW_USER/NUMParser/db/
     else
-        echo -e "${WARNING_COLOR}Файл базы данных numparser.db не найден в бэкапе${NC}"
+        echo -e "${YELLOW}Файл базы данных numparser.db не найден в бэкапе${NC}"
     fi
     
     # Пересобираем и настраиваем службу
@@ -548,7 +549,7 @@ setup_movies_api() {
         cd movies-api
         export PATH=\"/home/$NEW_USER/.local/bin:\$PATH\"
         /home/$NEW_USER/.local/bin/poetry install --no-root || {
-            echo -e '${ERROR_COLOR}Ошибка установки зависимостей!${NC}'
+            echo -e '${RED}Ошибка установки зависимостей!${NC}'
             exit 1
         }
     "
@@ -587,7 +588,7 @@ setup_3proxy() {
             "$BACKUP_PATH/etc/3proxy/conf/3proxy.cfg" \
             root@"$DEST_HOST":/etc/3proxy/conf/
     else
-        echo -e "${WARNING_COLOR}Файл конфигурации 3proxy не найден в бэкапе${NC}"
+        echo -e "${YELLOW}Файл конфигурации 3proxy не найден в бэкапе${NC}"
     fi
     
     # Запускаем службу
@@ -661,11 +662,11 @@ setup_marzban() {
         rsync -avz -e "ssh -i $SSH_KEY" \
             "$BACKUP_PATH/var/lib/marzban/" \
             root@"$DEST_HOST":/var/lib/marzban/ || {
-                echo -e "${ERROR_COLOR}Ошибка копирования данных Marzban${NC}" >&2
+                echo -e "${RED}Ошибка копирования данных Marzban${NC}" >&2
                 return 1
             }
     else
-        echo -e "${WARNING_COLOR}Директория /var/lib/marzban не найдена в бэкапе${NC}"
+        echo -e "${YELLOW}Директория /var/lib/marzban не найдена в бэкапе${NC}"
     fi
 
     # /opt/marzban/.env
@@ -673,11 +674,11 @@ setup_marzban() {
         rsync -avz -e "ssh -i $SSH_KEY" \
             "$BACKUP_PATH/opt/marzban/.env" \
             root@"$DEST_HOST":/opt/marzban/.env || {
-                echo -e "${ERROR_COLOR}Ошибка копирования .env файла${NC}" >&2
+                echo -e "${RED}Ошибка копирования .env файла${NC}" >&2
                 return 1
             }
     else
-        echo -e "${WARNING_COLOR}Файл /opt/marzban/.env не найден в бэкапе${NC}"
+        echo -e "${YELLOW}Файл /opt/marzban/.env не найден в бэкапе${NC}"
     fi
 
     # 3. Запуск Marzban
@@ -704,6 +705,49 @@ setup_marzban() {
     echo "Панель доступна по адресу: https://$DEST_HOST:${PANEL_PORT:-8000}"
 }
 
+# Восстановление конфигурации fail2ban
+setup_fail2ban() {
+    echo "Восстанавливаем конфигурацию fail2ban из бэкапа"
+    
+    # Устанавливаем fail2ban если еще не установлен
+    safe_ssh root@"$DEST_HOST" "apt-get install -y fail2ban"
+    
+    # Копируем jail.local
+    if [ -f "$BACKUP_PATH/etc/fail2ban/jail.local" ]; then
+        echo "Копируем jail.local..."
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$BACKUP_PATH/etc/fail2ban/jail.local" \
+            root@"$DEST_HOST":/etc/fail2ban/
+    else
+        echo -e "${YELLOW}Файл jail.local не найден в бэкапе${NC}"
+    fi
+    
+    # Копируем фильтры
+    if [ -d "$BACKUP_PATH/etc/fail2ban/filter.d" ]; then
+        echo "Копируем фильтры..."
+        safe_ssh root@"$DEST_HOST" "mkdir -p /etc/fail2ban/filter.d"
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$BACKUP_PATH/etc/fail2ban/filter.d/" \
+            root@"$DEST_HOST":/etc/fail2ban/filter.d/
+    else
+        echo -e "${YELLOW}Директория filter.d не найдена в бэкапе${NC}"
+    fi
+    
+    # Устанавливаем правильные права
+    safe_ssh root@"$DEST_HOST" "
+        chmod 644 /etc/fail2ban/jail.local
+        chmod 644 /etc/fail2ban/filter.d/*
+    "
+    
+    # Перезапускаем fail2ban
+    echo "Перезапускаем fail2ban..."
+    safe_ssh root@"$DEST_HOST" "systemctl restart fail2ban"
+    
+    # Проверяем статус
+    echo "Проверяем статус fail2ban..."
+    safe_ssh root@"$DEST_HOST" "fail2ban-client status"
+}
+
 cleanup() {
     echo "Выполняем очистку"
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt autoremove -y"
@@ -711,11 +755,11 @@ cleanup() {
 
 update_dns_records() {
     if [ "$DEBUG" = "True" ]; then
-        echo -e "\n${WARNING_COLOR}=== ПРОПУСК: Обновление DNS (режим отладки) ===${NC}"
+        echo -e "\n${YELLOW}=== ПРОПУСК: Обновление DNS (режим отладки) ===${NC}"
         return 0
     fi
 
-    echo -e "\n${INFO_COLOR}=== ОБНОВЛЕНИЕ DNS ЗАПИСЕЙ ===${NC}"
+    echo -e "\n${BLUE}=== ОБНОВЛЕНИЕ DNS ЗАПИСЕЙ ===${NC}"
     echo "Используем IP из DEST_HOST: $DEST_HOST"
 
     # Кодируем логин и пароль для URL
@@ -743,7 +787,7 @@ update_dns_records() {
         # Проверяем успешность
         if ! echo "$response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null; then
             all_success=false
-            echo -e "${ERROR_COLOR}Ошибка при обновлении DNS для $domain${NC}" >&2
+            echo -e "${RED}Ошибка при обновлении DNS для $domain${NC}" >&2
         fi
 
         # Обновляем www-поддомен
@@ -760,7 +804,7 @@ update_dns_records() {
 
         if ! echo "$www_response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null; then
             all_success=false
-            echo -e "${ERROR_COLOR}Ошибка при обновлении DNS для $www_domain${NC}" >&2
+            echo -e "${RED}Ошибка при обновлении DNS для $www_domain${NC}" >&2
         fi
     done
 
@@ -774,12 +818,9 @@ main() {
     check_required_files
     check_arguments "$@"
     
-    # Дальнейшие операции восстановления
-    run_if_enabled "setup_ssh_keys"
- 
     # Проверка подключения к целевому серверу
     if ! safe_sshpass "root@$DEST_HOST" "echo 'Тестовое подключение'" "$DEST_ROOT_PASSWORD"; then
-        echo -e "${ERROR_COLOR}Не удалось подключиться к $DEST_HOST${NC}" >&2
+        echo -e "${RED}Не удалось подключиться к $DEST_HOST${NC}" >&2
         exit 1
     fi
 
@@ -798,6 +839,7 @@ main() {
     run_if_enabled "install_lampac"
     run_if_enabled "transfer_nginx_certs"
     run_if_enabled "setup_marzban"
+    run_if_enabled "setup_fail2ban"  # Добавлен вызов функции восстановления fail2ban
 
     # Установка и настройка приложений
     run_if_enabled "install_go"
@@ -815,21 +857,21 @@ main() {
     # Очистка
     run_if_enabled "cleanup"
 
-    echo -e "${HEADER_COLOR}\n=== ВОССТАНОВЛЕНИЕ ЗАВЕРШЕНО ===${NC}"
+    echo -e "${PURPLE}\n=== ВОССТАНОВЛЕНИЕ ЗАВЕРШЕНО ===${NC}"
     echo "Доступ к серверу:"
     echo "SSH: ssh -i $SSH_KEY $NEW_USER@$DEST_HOST"
     echo "Пароль пользователя: $NEW_USER_PASSWORD"
 
     if [ "$DEBUG" = "True" ] || [ "$RUN_UPDATE_DNS_RECORDS" = "False" ] || [ "$DNS_UPDATED" = "false" ]; then
-        echo -e "\n${HIGHLIGHT_COLOR}=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===${NC}"
-        echo -e "${WARNING_COLOR}Следующие домены нужно перенаправить на новый IP ($DEST_HOST):${NC}"
+        echo -e "\n${CYAN}=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===${NC}"
+        echo -e "${YELLOW}Следующие домены нужно перенаправить на новый IP ($DEST_HOST):${NC}"
 
         for domain in $DOMAINS_TO_UPDATE; do
-            echo -e "  • ${SUCCESS_COLOR}$domain${NC}"
-            echo -e "  • ${SUCCESS_COLOR}www.$domain${NC}"
+            echo -e "  • ${GREEN}$domain${NC}"
+            echo -e "  • ${GREEN}www.$domain${NC}"
         done
 
-        echo -e "\n${ERROR_COLOR}❗ Это важно сделать сразу после восстановления!${NC}\n"
+        echo -e "\n${RED}❗ Это важно сделать сразу после восстановления!${NC}\n"
     fi
 }
 

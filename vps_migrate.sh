@@ -244,7 +244,7 @@ install_base_packages() {
     echo "Устанавливаем базовые пакеты"
     
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt update && sudo apt upgrade -y"
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt-get install -y zsh tree redis-server nginx zlib1g-dev libbz2-dev libreadline-dev llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev liblzma-dev python3-dev python3-lxml libxslt-dev libffi-dev libssl-dev gnumeric libsqlite3-dev libpq-dev libxml2-dev libxslt1-dev libjpeg-dev libfreetype6-dev libcurl4-openssl-dev supervisor libevent-dev yacc unzip net-tools pipx jq"
+    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt-get install -y zsh tree redis-server nginx zlib1g-dev libbz2-dev libreadline-dev llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev liblzma-dev python3-dev python3-lxml libxslt-dev libffi-dev libssl-dev gnumeric libsqlite3-dev libpq-dev libxml2-dev libxslt1-dev libjpeg-dev libfreetype6-dev libcurl4-openssl-dev supervisor libevent-dev yacc unzip net-tools pipx jq fail2ban"
     
     # Установка Docker
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh && rm get-docker.sh"
@@ -721,6 +721,67 @@ setup_marzban() {
     echo "Панель доступна по адресу: https://$DEST_HOST:${PANEL_PORT:-8000}"
 }
 
+setup_fail2ban() {
+    echo "Настраиваем fail2ban"
+
+    # Создаем временную папку локально
+    LOCAL_TEMP_DIR=$(mktemp -d)
+    mkdir -p "$LOCAL_TEMP_DIR/fail2ban"
+
+    # Копируем конфигурационные файлы с исходного сервера
+    echo "Копируем конфигурацию fail2ban..."
+    rsync -avz -e "ssh -i $SSH_KEY" \
+        root@"$SOURCE_HOST":/etc/fail2ban/jail.local \
+        "$LOCAL_TEMP_DIR/fail2ban/" || {
+            echo -e "${ERROR_COLOR}Ошибка копирования jail.local${NC}"
+            return 1
+        }
+
+    rsync -avz -e "ssh -i $SSH_KEY" \
+        root@"$SOURCE_HOST":/etc/fail2ban/filter.d/ \
+        "$LOCAL_TEMP_DIR/fail2ban/filter.d/" || {
+            echo -e "${ERROR_COLOR}Ошибка копирования фильтров${NC}"
+            return 1
+        }
+
+    # Копируем файлы на целевой сервер
+    echo "Переносим конфигурацию на новый сервер..."
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "mkdir -p /etc/fail2ban/filter.d"
+    
+    rsync -avz -e "ssh -i $SSH_KEY" \
+        "$LOCAL_TEMP_DIR/fail2ban/jail.local" \
+        root@"$DEST_HOST":/etc/fail2ban/ || {
+            echo -e "${ERROR_COLOR}Ошибка переноса jail.local${NC}"
+            return 1
+        }
+
+    rsync -avz -e "ssh -i $SSH_KEY" \
+        "$LOCAL_TEMP_DIR/fail2ban/filter.d/" \
+        root@"$DEST_HOST":/etc/fail2ban/filter.d/ || {
+            echo -e "${ERROR_COLOR}Ошибка переноса фильтров${NC}"
+            return 1
+        }
+
+    # Убедимся, что права установлены правильно
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "
+        chmod 644 /etc/fail2ban/jail.local
+        chmod 644 /etc/fail2ban/filter.d/*
+    "
+
+    # Перезапускаем fail2ban
+    echo "Перезапускаем fail2ban..."
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "systemctl restart fail2ban"
+
+    # Проверяем статус
+    echo "Проверяем статус fail2ban..."
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "fail2ban-client status"
+
+    # Очищаем временные файлы
+    rm -rf "$LOCAL_TEMP_DIR"
+
+    echo "Настройка fail2ban завершена"
+}
+
 cleanup() {
     echo "Выполняем очистку"
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt autoremove -y"
@@ -809,6 +870,7 @@ main() {
     run_if_enabled "install_lampac"
     run_if_enabled "transfer_nginx_certs"
     run_if_enabled "setup_marzban"
+    run_if_enabled "setup_fail2ban"
 
     # Установка от пользователя
     run_if_enabled "install_go"

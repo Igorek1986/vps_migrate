@@ -105,6 +105,11 @@ create_backup() {
         "/etc/systemd/system/glances.service:/etc/systemd/system/"
         "/home/$NEW_USER/.zshrc:/home/$NEW_USER/"
         "/home/$NEW_USER/.zprofile:/home/$NEW_USER/"
+        "/etc/fail2ban/jail.local:/etc/fail2ban/"
+        "/etc/fail2ban/filter.d/nginx-404.conf:/etc/fail2ban/filter.d/"
+        "/etc/fail2ban/filter.d/nginx-noscript.conf:/etc/fail2ban/filter.d/"
+        "/etc/fail2ban/filter.d/nginx-badbots.conf:/etc/fail2ban/filter.d/"
+        "/etc/fail2ban/filter.d/nginx-req-limit.conf:/etc/fail2ban/filter.d/"
     )
     
     # Создаем бэкап каждого элемента
@@ -141,6 +146,18 @@ create_backup() {
 Домены: ${DOMAINS_TO_UPDATE:-"не заданы"}
 Версия скрипта: $(git rev-parse HEAD 2>/dev/null || echo "unknown")
 Метод копирования: rsync с сохранением владельца и прав
+
+Содержимое бэкапа:
+- Конфигурация Nginx (sites-available, sites-enabled)
+- SSL сертификаты Let's Encrypt
+- Конфигурация Marzban
+- Конфигурация Lampac
+- Конфигурация NUMParser
+- Конфигурация Movies API
+- Конфигурация 3proxy
+- Конфигурация Glances
+- Конфигурация fail2ban
+- Пользовательские настройки (.zshrc, .zprofile)
 EOF
     
     # Создаем скрипт для восстановления
@@ -278,6 +295,16 @@ for item_dir in */; do
                     else
                         echo "⚠ /etc/nginx не найден"
                     fi
+                    
+                    # Проверяем fail2ban
+                    if ssh -i "$SSH_KEY" root@"$DEST_HOST" "[ -f '/etc/fail2ban/jail.local' ]"; then
+                        echo "✓ /etc/fail2ban/jail.local существует"
+                        # Перезапускаем fail2ban
+                        ssh -i "$SSH_KEY" root@"$DEST_HOST" "systemctl restart fail2ban"
+                        echo "✓ fail2ban перезапущен"
+                    else
+                        echo "⚠ /etc/fail2ban/jail.local не найден"
+                    fi
                     ;;
                 "var")
                     if ssh -i "$SSH_KEY" root@"$DEST_HOST" "[ -d '/var/lib/marzban' ]"; then
@@ -301,7 +328,7 @@ echo ""
 echo "Не забудьте:"
 echo "  • Установить зависимости (Go, Poetry, pipx, 3proxy)"
 echo "  • Пересобрать приложения (NUMParser, movies-api)"
-echo "  • Перезапустить службы: systemctl restart nginx numparser movies-api glances 3proxy"
+echo "  • Перезапустить службы: systemctl restart nginx numparser movies-api glances 3proxy fail2ban"
 echo "  • Проверить работу всех служб"
 echo "  • Обновить DNS записи если необходимо"
 echo "  • Проверить SSL сертификаты"
@@ -441,4 +468,4 @@ main() {
     echo -e "${HEADER_COLOR}=== БЭКАП ЗАВЕРШЕН ===${NC}"
 }
 
-main "$@" 
+main "$@"
