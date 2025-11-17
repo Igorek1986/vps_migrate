@@ -99,7 +99,7 @@ create_backup() {
         "/home/lampac/cache/storage:/home/lampac/cache/"
         "/home/lampac/passwd:/home/lampac/"
         "/home/$NEW_USER/movies-api:/home/$NEW_USER/"
-        "/etc/3proxy/conf:/etc/3proxy/"
+        "/etc/3proxy/3proxy.cfg:/etc/3proxy/3proxy.cfg"
         "/etc/systemd/system/numparser.service:/etc/systemd/system/"
         "/etc/systemd/system/movies-api.service:/etc/systemd/system/"
         "/etc/systemd/system/glances.service:/etc/systemd/system/"

@@ -570,10 +570,10 @@ setup_3proxy() {
     # Копируем конфиг 3proxy
     echo "Копируем конфигурацию 3proxy..."
     LOCAL_TEMP_FILE=$(mktemp)
-    rsync -avz -e "ssh -i $SSH_KEY" root@"$SOURCE_HOST":/etc/3proxy/conf/3proxy.cfg "$LOCAL_TEMP_FILE"
+    rsync -avz -e "ssh -i $SSH_KEY" root@"$SOURCE_HOST":/etc/3proxy/3proxy.cfg "$LOCAL_TEMP_FILE"
     # scp -i "$SSH_KEY" root@"$SOURCE_HOST":/etc/3proxy/conf/3proxy.cfg "$LOCAL_TEMP_FILE"
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo mkdir -p /etc/3proxy/conf"
-    rsync -avz -e "ssh -i $SSH_KEY" "$LOCAL_TEMP_FILE" root@"$DEST_HOST":/etc/3proxy/conf/3proxy.cfg
+    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo mkdir -p /etc/3proxy/"
+    rsync -avz -e "ssh -i $SSH_KEY" "$LOCAL_TEMP_FILE" root@"$DEST_HOST":/etc/3proxy/3proxy.cfg
     # scp -i "$SSH_KEY" "$LOCAL_TEMP_FILE" root@"$DEST_HOST":/etc/3proxy/conf/3proxy.cfg
     rm -f "$LOCAL_TEMP_FILE"
     

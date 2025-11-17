@@ -581,12 +581,12 @@ setup_3proxy() {
     safe_ssh $NEW_USER@"$DEST_HOST" "cd 3proxy && ln -s Makefile.Linux Makefile && make && sudo make install"
     
     # Копируем конфиг из бэкапа
-    if [ -f "$BACKUP_PATH/etc/3proxy/conf/3proxy.cfg" ]; then
+    if [ -f "$BACKUP_PATH/etc/3proxy/3proxy.cfg" ]; then
         echo "Копируем конфигурацию 3proxy..."
-        safe_ssh $NEW_USER@"$DEST_HOST" "sudo mkdir -p /etc/3proxy/conf"
+        safe_ssh $NEW_USER@"$DEST_HOST" "sudo mkdir -p /etc/3proxy/"
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/etc/3proxy/conf/3proxy.cfg" \
-            root@"$DEST_HOST":/etc/3proxy/conf/
+            "$BACKUP_PATH/etc/3proxy/3proxy.cfg" \
+            root@"$DEST_HOST":/etc/3proxy/3proxy.cfg
     else
         echo -e "${YELLOW}Файл конфигурации 3proxy не найден в бэкапе${NC}"
     fi
