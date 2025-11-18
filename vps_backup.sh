@@ -98,6 +98,7 @@ create_backup() {
         "/home/lampac/wwwroot/my_plugins:/home/lampac/wwwroot/"
         "/home/lampac/database/:/home/lampac/database/"
         "/home/lampac/passwd:/home/lampac/"
+        "/home/lampac/module/TimecodeUser/:/home/lampac/module/TimecodeUser/"
         "/home/$NEW_USER/movies-api:/home/$NEW_USER/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
         "/etc/systemd/system/numparser.service:/etc/systemd/system/"
