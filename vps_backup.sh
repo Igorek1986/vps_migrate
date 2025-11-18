@@ -96,7 +96,7 @@ create_backup() {
         "/home/lampac/plugins/lampainit.my.js:/home/lampac/plugins/"
         "/home/lampac/plugins/privateinit.my.js:/home/lampac/plugins/"
         "/home/lampac/wwwroot/my_plugins:/home/lampac/wwwroot/"
-        "/home/lampac/cache/storage:/home/lampac/cache/"
+        "/home/lampac/database/:/home/lampac/database/"
         "/home/lampac/passwd:/home/lampac/"
         "/home/$NEW_USER/movies-api:/home/$NEW_USER/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
