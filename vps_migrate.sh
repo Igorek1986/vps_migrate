@@ -62,6 +62,7 @@ check_required_files() {
     required_vars=(
         "SOURCE_HOST" "DEST_HOST" "DEST_ROOT_PASSWORD" 
         "NEW_USER" "NEW_USER_PASSWORD" "DOMAINS_TO_UPDATE" 
+        "SWAP_SIZE"
         "BEGET_LOGIN" "BEGET_PASSWORD"
         "DEBUG"
         # Флаги выполнения функций
@@ -70,6 +71,8 @@ check_required_files() {
         "RUN_INSTALL_LAMPAC" "RUN_TRANSFER_NGINX_CERTS" "RUN_SETUP_MARZBAN"
         "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_NUMPARSER"
         "RUN_SETUP_MOVIES_API" "RUN_SETUP_3PROXY" "RUN_SETUP_GLANCES"
+        "RUN_SETUP_SWAP"
+        "RUN_SETUP_FAIL2BAN" 
         "RUN_UPDATE_DNS_RECORDS"
         "RUN_CLEANUP"
     )
@@ -846,6 +849,34 @@ update_dns_records() {
     DNS_UPDATED=$all_success
 }
 
+setup_swap() {
+    if [ "$SWAP_SIZE" = "0" ]; then
+        echo -e "${YELLOW}SWAP_SIZE=0 — swap не создаётся.${NC}"
+        return 0
+    fi
+
+    echo "Создаём swap размером $SWAP_SIZE..."
+
+    # Проверяем, не создан ли уже swap
+    if ssh -i "$SSH_KEY" root@"$DEST_HOST" "swapon --show | grep -q '/swapfile'"; then
+        echo -e "${YELLOW}Swap уже существует, пропускаем.${NC}"
+        return 0
+    fi
+
+    # Создаём и настраиваем swap напрямую
+    ssh -i "$SSH_KEY" root@"$DEST_HOST" "
+        fallocate -l $SWAP_SIZE /swapfile &&
+        chmod 600 /swapfile &&
+        mkswap /swapfile &&
+        swapon /swapfile &&
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab &&
+        echo 'vm.swappiness=10' >> /etc/sysctl.conf &&
+        sysctl -p
+    "
+
+    echo -e "${GREEN}Swap ($SWAP_SIZE) успешно настроен.${NC}"
+}
+
 main() {
     # echo "=== Начало миграции VPS ==="
     echo -e "${HEADER_COLOR}\n=== НАЧАЛО МИГРАЦИИ VPS ===${NC}"
@@ -865,6 +896,7 @@ main() {
     run_if_enabled "setup_oh_my_zsh"
     run_if_enabled "install_pyenv"
     run_if_enabled "install_poetry"
+    run_if_enabled "setup_swap"
 
     # Установка от root
     run_if_enabled "install_lampac"
