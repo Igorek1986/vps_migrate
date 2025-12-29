@@ -509,25 +509,18 @@ setup_numparser() {
             exit 1
         }
     "
-    
-    safe_ssh $NEW_USER@"$DEST_HOST" "sudo bash -c 'cat > /etc/systemd/system/numparser.service <<\"EOF\"
-[Unit]
-Description=NUMParser Service
-Wants=network.target
-After=network.target
 
-[Service]
-WorkingDirectory=/home/$NEW_USER/NUMParser
-ExecStart=/home/$NEW_USER/NUMParser/NUMParser_deb
-Environment=GIN_MODE=release
-Restart=always
-User=$NEW_USER
 
-[Install]
-WantedBy=multi-user.target
-EOF'"
-    
-    safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start numparser && sudo systemctl enable numparser"
+    if [ -f "$BACKUP_PATH/etc/systemd/system/numparser.service" ]; then
+        echo "Копируем numparser.service..."
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$BACKUP_PATH/etc/systemd/system/numparser.service" \
+            root@"$DEST_HOST":/etc/systemd/system/
+        safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start numparser && sudo systemctl enable numparser"
+    else
+        echo -e "${YELLOW}Файл numparser.service не найден в бэкапе${NC}"
+    fi
+     
 }
 
 setup_movies_api() {
@@ -555,24 +548,17 @@ setup_movies_api() {
             exit 1
         }
     "
-    
-    safe_ssh $NEW_USER@"$DEST_HOST" "sudo bash -c 'cat > /etc/systemd/system/movies-api.service <<\"EOF\"
-[Unit]
-Description=Movies API Service
-Wants=network.target
-After=network.target
 
-[Service]
-WorkingDirectory=/home/$NEW_USER/movies-api
-ExecStart=/home/$NEW_USER/.local/bin/poetry run python main.py
-Restart=always
-User=$NEW_USER
-
-[Install]
-WantedBy=multi-user.target
-EOF'"
-    
-    safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start movies-api && sudo systemctl enable movies-api"
+    if [ -f "$BACKUP_PATH/etc/systemd/system/movies-api.service" ]; then
+        echo "Копируем movies-api.service..."
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$BACKUP_PATH/etc/systemd/system/movies-api.service" \
+            root@"$DEST_HOST":/etc/systemd/system/
+        safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start movies-api && sudo systemctl enable movies-api"
+    else
+        echo -e "${YELLOW}Файл movies-api.service не найден в бэкапе${NC}"
+    fi
+        
 }
 
 setup_3proxy() {
@@ -601,22 +587,16 @@ setup_glances() {
     echo "Устанавливаем Glances"
     
     safe_ssh $NEW_USER@"$DEST_HOST" "pipx install glances && pipx inject glances fastapi uvicorn jinja2 || true"
-    
-    safe_ssh $NEW_USER@"$DEST_HOST" "sudo bash -c 'cat > /etc/systemd/system/glances.service <<\"EOF\"
-[Unit]
-Description=Glances (via pipx)
-After=network.target
 
-[Service]
-ExecStart=/home/$NEW_USER/.local/bin/glances -w -B 0.0.0.0
-Restart=on-failure
-User=$NEW_USER
-
-[Install]
-WantedBy=multi-user.target
-EOF'"
-    
-    safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start glances && sudo systemctl enable glances"
+    if [ -f "$BACKUP_PATH/etc/systemd/system/glances.service" ]; then
+        echo "Копируем glances.service..."
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$BACKUP_PATH/etc/systemd/system/glances.service" \
+            root@"$DEST_HOST":/etc/systemd/system/
+        safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start glances && sudo systemctl enable glances"
+    else
+        echo -e "${YELLOW}Файл glances.service не найден в бэкапе${NC}"
+    fi
 }
 
 setup_marzban() {

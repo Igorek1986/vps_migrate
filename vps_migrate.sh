@@ -501,26 +501,12 @@ setup_numparser() {
     }
 "
     
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo bash -c 'cat > /etc/systemd/system/numparser.service <<\"EOF\"
-[Unit]
-Description=NUMParser Service
-Wants=network.target
-After=network.target
-
-[Service]
-WorkingDirectory=/home/$NEW_USER/NUMParser
-ExecStart=/home/$NEW_USER/NUMParser/NUMParser_deb
-Environment=GIN_MODE=release
-Restart=always
-User=$NEW_USER
-
-[Install]
-WantedBy=multi-user.target
-EOF'"
     
     # Копируем файлы с исходного сервера на локальную машину
     rsync -avz -e "ssh -i $SSH_KEY" $NEW_USER@"$SOURCE_HOST":/home/$NEW_USER/NUMParser/db/numparser.db "$LOCAL_TEMP_DIR/numparser_data"
     rsync -avz -e "ssh -i $SSH_KEY" "$LOCAL_TEMP_DIR/numparser_data/numparser.db" $NEW_USER@"$DEST_HOST":/home/$NEW_USER/NUMParser/db/
+    rsync -avz -e "ssh -i $SSH_KEY" rootR@"$SOURCE_HOST":/etc/systemd/system/numparser.service "$LOCAL_TEMP_DIR/system"
+    rsync -avz -e "ssh -i $SSH_KEY" "$LOCAL_TEMP_DIR/system/numparser.service" root@"$DEST_HOST":/etc/systemd/system/
     
     # Очищаем временную папку
     rm -rf "$LOCAL_TEMP_DIR"
@@ -532,8 +518,6 @@ setup_movies_api() {
     echo "Настраиваем Movies-api"
     
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "git clone https://github.com/Igorek1986/movies-api.git || true"
-    scp -i "$SSH_KEY" movies-api.env $NEW_USER@"$DEST_HOST":/home/$NEW_USER/movies-api/.env
-    # ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "cd movies-api && poetry install --no-root"
     echo "Устанавливаем зависимости..."
     ssh -i "$SSH_KEY" "$NEW_USER@$DEST_HOST" "
         cd movies-api
@@ -543,22 +527,8 @@ setup_movies_api() {
             exit 1
         }
     "
-    
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo bash -c 'cat > /etc/systemd/system/movies-api.service <<\"EOF\"
-[Unit]
-Description=Movies API Service
-Wants=network.target
-After=network.target
-
-[Service]
-WorkingDirectory=/home/$NEW_USER/movies-api
-ExecStart=/home/$NEW_USER/.local/bin/poetry run python main.py
-Restart=always
-User=$NEW_USER
-
-[Install]
-WantedBy=multi-user.target
-EOF'"
+    rsync -avz -e "ssh -i $SSH_KEY" rootR@"$SOURCE_HOST":/etc/systemd/system/movies-api.service "$LOCAL_TEMP_DIR/system"
+    rsync -avz -e "ssh -i $SSH_KEY" "$LOCAL_TEMP_DIR/system/movies-api.service" root@"$DEST_HOST":/etc/systemd/system/
     
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start movies-api && sudo systemctl enable movies-api"
 }
@@ -589,20 +559,10 @@ setup_glances() {
     
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "pipx install glances && pipx inject glances fastapi uvicorn jinja2 || true"
     
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo bash -c 'cat > /etc/systemd/system/glances.service <<\"EOF\"
-[Unit]
-Description=Glances (via pipx)
-After=network.target
+          
+    rsync -avz -e "ssh -i $SSH_KEY" rootR@"$SOURCE_HOST":/etc/systemd/system/glances.service "$LOCAL_TEMP_DIR/system"
+    rsync -avz -e "ssh -i $SSH_KEY" "$LOCAL_TEMP_DIR/system/glances.service" root@"$DEST_HOST":/etc/systemd/system/
 
-[Service]
-ExecStart=/home/$NEW_USER/.local/bin/glances -w -B 0.0.0.0
-Restart=on-failure
-User=$NEW_USER
-
-[Install]
-WantedBy=multi-user.target
-EOF'"
-    
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start glances && sudo systemctl enable glances"
 }
 
