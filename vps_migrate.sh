@@ -376,7 +376,7 @@ install_lampac() {
 
     echo "Копируем файлы с исходного сервера..."
     rsync -avz --relative -e "ssh -i $SSH_KEY" \
-    root@"$SOURCE_HOST":/./home/lampac/{module/manifest.json,init.conf,users.json,wwwroot/profileIcons,plugins/lampainit.my.js,plugins/privateinit.my.js,cache/storage,wwwroot/my_plugins,passwd} \
+    root@"$SOURCE_HOST":/./home/lampac/{module/manifest.json,init.conf,users.json,wwwroot/profileIcons,plugins/lampainit-invc.my.js,plugins/privateinit.my.js,cache/storage,wwwroot/my_plugins,passwd} \
     "$LOCAL_TEMP_DIR"
 
 

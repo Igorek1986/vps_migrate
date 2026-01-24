@@ -94,7 +94,7 @@ create_backup() {
         "/home/lampac/init.conf:/home/lampac/"
         "/home/lampac/users.json:/home/lampac/"
         "/home/lampac/wwwroot/profileIcons:/home/lampac/wwwroot/"
-        "/home/lampac/plugins/lampainit.my.js:/home/lampac/plugins/"
+        "/home/lampac/plugins/lampainit-invc.my.js:/home/lampac/plugins/"
         "/home/lampac/plugins/privateinit.my.js:/home/lampac/plugins/"
         "/home/lampac/wwwroot/my_plugins:/home/lampac/wwwroot/"
         "/home/lampac/database/:/home/lampac/database/"
