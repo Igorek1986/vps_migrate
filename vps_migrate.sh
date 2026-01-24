@@ -432,6 +432,13 @@ transfer_nginx_certs() {
     # Копируем конфиги Nginx
     echo "Копируем конфиги Nginx..."
     ssh -i "$SSH_KEY" root@"$DEST_HOST" "mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled"
+
+    # nginx.conf
+    if [ -f "$BACKUP_PATH/etc/nginx/nginx.conf" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/etc/nginx/nginx.conf" root@"$DEST_HOST":/etc/nginx/
+    else
+        echo -e "${YELLOW}Файл nginx.conf не найден в бэкапе${NC}"
+    fi
     
     # sites-available
     rsync -avz -e "ssh -i $SSH_KEY" root@"$SOURCE_HOST":/etc/nginx/sites-available/ "$LOCAL_TEMP_DIR/sites-available"

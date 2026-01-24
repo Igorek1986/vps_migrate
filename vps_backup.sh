@@ -86,6 +86,7 @@ create_backup() {
         "/opt/marzban/.env:/opt/marzban/"
         "/etc/nginx/sites-available:/etc/nginx/"
         "/etc/nginx/sites-enabled:/etc/nginx/"
+        "/etc/nginx/nginx.conf:/etc/nginx/"
         "/etc/letsencrypt:/etc/"
         "/home/$NEW_USER/antizapret:/home/$NEW_USER/"
         "/home/$NEW_USER/NUMParser/db/numparser.db:/home/$NEW_USER/NUMParser/db/"
