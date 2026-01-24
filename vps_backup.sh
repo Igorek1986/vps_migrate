@@ -31,7 +31,7 @@ check_required_files() {
     local missing_files=()
     
     [ ! -f "migrate.env" ] && missing_files+=("migrate.env")
-    [ ! -f "id_rsa" ] && missing_files+=("id_rsa")
+    [ ! -f "id_ed25519" ] && missing_files+=("id_ed25519")
     
     if [ ${#missing_files[@]} -ne 0 ]; then
         echo -e "${ERROR_COLOR}Отсутствуют необходимые файлы: ${missing_files[*]}${NC}"
@@ -46,7 +46,7 @@ check_required_files() {
         exit 1
     fi
     
-    SSH_KEY="$SCRIPT_DIR/id_rsa"
+    SSH_KEY="$SCRIPT_DIR/id_ed25519"
     chmod 600 "$SSH_KEY"
 }
 
@@ -180,7 +180,7 @@ if [ $# -lt 2 ]; then
     echo "  NEW_USER_PASSWORD - Пароль для пользователя (опционально)"
     echo ""
     echo "SSH ключ автоматически определяется из родительской директории"
-    echo "Убедитесь, что id_rsa находится в корне проекта"
+    echo "Убедитесь, что id_ed25519 находится в корне проекта"
     exit 1
 fi
 
@@ -191,7 +191,7 @@ NEW_USER_PASSWORD="$3"
 # Определяем путь к SSH ключу (на два уровня выше - корень проекта)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
-SSH_KEY="$PROJECT_ROOT/id_rsa"
+SSH_KEY="$PROJECT_ROOT/id_ed25519"
 
 echo "Восстанавливаем данные на $DEST_HOST..."
 echo "Пользователь: $NEW_USER"
@@ -200,7 +200,7 @@ echo "SSH ключ: $SSH_KEY"
 # Проверяем наличие SSH ключа
 if [ ! -f "$SSH_KEY" ]; then
     echo "ОШИБКА: SSH ключ не найден: $SSH_KEY"
-    echo "Убедитесь, что id_rsa находится в корне проекта"
+    echo "Убедитесь, что id_ed25519 находится в корне проекта"
     exit 1
 fi
 

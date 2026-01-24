@@ -1,6 +1,8 @@
 migrate.env
 id_rsa
 id_rsa.pub
+id_ed25519
+id_ed25519.pub
 numparser_config.yml
 movies-api.env
 backups/

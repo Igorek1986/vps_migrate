@@ -42,8 +42,8 @@ check_required_files() {
     local missing_files=()
     
     [ ! -f "migrate.env" ] && missing_files+=("migrate.env")
-    [ ! -f "id_rsa" ] && missing_files+=("id_rsa")
-    [ ! -f "id_rsa.pub" ] && missing_files+=("id_rsa.pub")
+    [ ! -f "id_ed25519" ] && missing_files+=("id_ed25519")
+    [ ! -f "id_ed25519.pub" ] && missing_files+=("id_ed25519.pub")
     [ ! -f "movies-api.env" ] && missing_files+=("movies-api.env")
     [ ! -f "numparser_config.yml" ] && missing_files+=("numparser_config.yml")
     
@@ -79,8 +79,8 @@ check_required_files() {
         fi
     done
     
-    SSH_KEY="$SCRIPT_DIR/id_rsa"
-    SSH_PUB_KEY="$SCRIPT_DIR/id_rsa.pub"
+    SSH_KEY="$SCRIPT_DIR/id_ed25519"
+    SSH_PUB_KEY="$SCRIPT_DIR/id_ed25519.pub"
     chmod 600 "$SSH_KEY"
 }
 
