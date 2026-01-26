@@ -844,6 +844,48 @@ setup_swap() {
     echo -e "${GREEN}Swap ($SWAP_SIZE) успешно настроен.${NC}"
 }
 
+# Автоматическое обновление migrate.env после успешного восстановления
+update_migrate_env_after_restore() {
+    echo -e "${BLUE}=== ОБНОВЛЕНИЕ migrate.env ПОСЛЕ ВОССТАНОВЛЕНИЯ ===${NC}"
+    
+    local migrate_file="$SCRIPT_DIR/migrate.env"
+    
+    # Проверяем, что файл существует
+    if [ ! -f "$migrate_file" ]; then
+        echo -e "${RED}Ошибка: файл migrate.env не найден для обновления${NC}"
+        return 1
+    fi
+    
+    # Создаем бэкап текущей конфигурации
+    local backup_file="$migrate_file.pre-restore-$(date +%Y%m%d_%H%M%S)"
+    cp "$migrate_file" "$backup_file"
+    echo -e "${INFO_COLOR}Создан бэкап конфигурации: $backup_file${NC}"
+    
+    # Сохраняем текущие значения для логгирования
+    local old_source=$(grep "^SOURCE_HOST=" "$migrate_file" | cut -d'=' -f2- | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
+    local old_dest=$(grep "^DEST_HOST=" "$migrate_file" | cut -d'=' -f2- | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
+    
+    # 1. Меняем SOURCE_HOST = старый DEST_HOST
+    if [[ "$OLD_DEST_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        # Удаляем кавычки из значения, если есть, и заменяем
+        sed -i.bak "s|^SOURCE_HOST=.*|SOURCE_HOST=$OLD_DEST_HOST|" "$migrate_file"
+        echo -e "${SUCCESS_COLOR}✓ SOURCE_HOST обновлен: $old_source → $OLD_DEST_HOST${NC}"
+    else
+        echo -e "${ERROR_COLOR}Ошибка: некорректный OLD_DEST_HOST='$OLD_DEST_HOST'${NC}"
+        return 1
+    fi
+    
+    # 2. Очищаем DEST_HOST (делаем пустым)
+    sed -i.bak "s|^DEST_HOST=.*|DEST_HOST=|" "$migrate_file"
+    echo -e "${SUCCESS_COLOR}✓ DEST_HOST очищен (готов к новой миграции)${NC}"
+    
+    # Удаляем временные .bak файлы от sed
+    rm -f "$migrate_file.bak"
+    
+    echo -e "${HEADER_COLOR}Новая конфигурация migrate.env:${NC}"
+    grep -E "^(SOURCE_HOST|DEST_HOST)=" "$migrate_file" | sed "s/^/  /"
+}
+
 main() {
     # echo "=== Начало миграции VPS ==="
     echo -e "${HEADER_COLOR}\n=== НАЧАЛО МИГРАЦИИ VPS ===${NC}"
@@ -852,6 +894,10 @@ main() {
     echo "Источник: $SOURCE_HOST"
     echo "Назначение: $DEST_HOST"
     echo "Пользователь: $NEW_USER"
+
+    # Сохраняем оригинальные значения ДО начала миграции
+    OLD_SOURCE_HOST="$SOURCE_HOST"
+    OLD_DEST_HOST="$DEST_HOST"
 
     # Выполнение функций по флагам
     run_if_enabled "setup_ssh_keys"
@@ -882,6 +928,7 @@ main() {
     # Обновление DNS только в production-режиме
     if [ "$DEBUG" = "False" ]; then
         run_if_enabled "update_dns_records"
+        update_migrate_env_after_restore
     fi
 
     # Очистка
