@@ -169,15 +169,25 @@ select_arrow() {
 
     tput civis 2>/dev/null  # скрываем курсор
 
-    # Первоначальная отрисовка
-    local i
-    for ((i=0; i<count; i++)); do
-        if [ $i -eq $selected ]; then
-            echo -e "  ${GREEN}▶ ${options[$i]}${NC}"
-        else
-            echo -e "    ${options[$i]}"
-        fi
-    done
+    # Сохраняем позицию курсора перед первой опцией
+    tput sc 2>/dev/null
+
+    # Функция отрисовки опций (без подсказки — она статичная)
+    _draw_options() {
+        local i
+        tput rc 2>/dev/null  # восстанавливаем позицию
+        for ((i=0; i<count; i++)); do
+            tput el 2>/dev/null
+            if [ $i -eq $selected ]; then
+                echo -e "  ${GREEN}▶ ${options[$i]}${NC}"
+            else
+                echo -e "    ${options[$i]}"
+            fi
+        done
+    }
+
+    # Первоначальная отрисовка + статичная подсказка
+    _draw_options
     echo -e "  ${YELLOW}[↑↓ навигация  Enter выбор  q выход]${NC}"
 
     while true; do
@@ -203,16 +213,7 @@ select_arrow() {
             break
         fi
 
-        # Перерисовка меню (подсказка остаётся внизу, не перерисовывается)
-        tput cuu $count 2>/dev/null
-        for ((i=0; i<count; i++)); do
-            tput el 2>/dev/null
-            if [ $i -eq $selected ]; then
-                echo -e "  ${GREEN}▶ ${options[$i]}${NC}"
-            else
-                echo -e "    ${options[$i]}"
-            fi
-        done
+        _draw_options
     done
 
     tput cnorm 2>/dev/null  # показываем курсор
