@@ -6,14 +6,13 @@
 set -e
 
 # Цветовые коды
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[1;34m'
-PURPLE='\033[1;35m'
-CYAN='\033[1;36m'
-WHITE='\033[1;37m'
-NC='\033[0m' # No Color
+if [ -t 1 ]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+    BLUE='\033[1;34m'; PURPLE='\033[1;35m'; CYAN='\033[1;36m'
+    WHITE='\033[1;37m'; NC='\033[0m'
+else
+    RED=''; GREEN=''; YELLOW=''; BLUE=''; PURPLE=''; CYAN=''; WHITE=''; NC=''
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -85,35 +84,49 @@ check_required_files() {
 }
 
 # =============================================
-# Функция-обертка для выполнения команд
+# Трекинг шагов восстановления
 # =============================================
+RESTORE_LOG=()
+
+log_step() {
+    RESTORE_LOG+=("$1:$2")
+}
+
 run_if_enabled() {
     local func_name=$1
     local flag_name="RUN_$(echo $func_name | tr '[:lower:]' '[:upper:]')"
-    
+
     if [ "${!flag_name}" = "True" ]; then
         echo -e "\n${BLUE}=== ВЫПОЛНЕНИЕ: ${func_name} ===${NC}"
-        $func_name
+        if $func_name; then
+            log_step "$func_name" "ok"
+        else
+            log_step "$func_name" "error"
+        fi
     else
-        echo -e "\n${YELLOW}=== ПРОПУСК: ${func_name} (отключено в конфиге) ===${NC}"
+        echo -e "\n${YELLOW}=== ПРОПУСК: ${func_name} (отключено) ===${NC}"
+        log_step "$func_name" "skip"
     fi
 }
 
-# Функция для безопасного выполнения SSH-команд с обработкой known_hosts
+print_summary() {
+    echo -e "\n${PURPLE}=== ИТОГ ВОССТАНОВЛЕНИЯ ===${NC}"
+    for entry in "${RESTORE_LOG[@]}"; do
+        local step="${entry%%:*}"
+        local status="${entry##*:}"
+        case "$status" in
+            ok)    echo -e "  ${GREEN}✓${NC} $step" ;;
+            error) echo -e "  ${RED}✗${NC} $step" ;;
+            skip)  echo -e "  ${YELLOW}—${NC} $step" ;;
+        esac
+    done
+}
+
+# Функция для безопасного выполнения SSH-команд
 safe_ssh() {
     local host="$1"
     local command="$2"
-    local known_hosts="$HOME/.ssh/known_hosts"
-    
-    # Удаляем старые записи по IP/домену
-    ssh-keygen -R "$host" -f "$known_hosts" >/dev/null 2>&1
-    sed -i.bak "/$host/d" "$known_hosts" 2>/dev/null
-
-    # Выполняем команду с автоматическим принятием нового ключа
-    ssh -o StrictHostKeyChecking=accept-new -i "$SSH_KEY" "$host" "$command"
-    
-    # Проверяем статус выполнения
-    if [ $? -ne 0 ]; then
+    if ! ssh -o StrictHostKeyChecking=accept-new -i "$SSH_KEY" "$host" "$command"; then
         echo -e "${RED}Ошибка выполнения команды на $host: $command${NC}" >&2
         return 1
     fi
@@ -131,50 +144,168 @@ safe_sshpass() {
     fi
 }
 
-# Выбор цели восстановления
+# =============================================
+# Меню с навигацией стрелками
+# Результат: SELECTED_INDEX (номер), SELECTED_VALUE (текст)
+# =============================================
+select_arrow() {
+    local title="$1"
+    shift
+    local options=("$@")
+    local selected=0
+    local count=${#options[@]}
+
+    # Если не терминал — выбираем первый вариант без интерактива
+    if [ ! -t 0 ]; then
+        SELECTED_INDEX=0
+        SELECTED_VALUE="${options[0]}"
+        return
+    fi
+
+    trap 'tput cnorm 2>/dev/null' INT TERM
+
+    echo -e "${BLUE}${title}${NC}"
+    echo ""
+
+    tput civis 2>/dev/null  # скрываем курсор
+
+    # Первоначальная отрисовка
+    local i
+    for ((i=0; i<count; i++)); do
+        if [ $i -eq $selected ]; then
+            echo -e "  ${GREEN}▶ ${options[$i]}${NC}"
+        else
+            echo -e "    ${options[$i]}"
+        fi
+    done
+
+    while true; do
+        IFS= read -rsn1 key 2>/dev/null
+
+        if [[ "$key" == $'\x1b' ]]; then
+            read -rsn2 -t 0.1 key 2>/dev/null || true
+            case "$key" in
+                '[A')  # Вверх
+                    selected=$(( (selected - 1 + count) % count ))
+                    ;;
+                '[B')  # Вниз
+                    selected=$(( (selected + 1) % count ))
+                    ;;
+            esac
+        elif [[ "$key" == '' || "$key" == $'\n' || "$key" == $'\r' ]]; then
+            break
+        fi
+
+        # Перерисовка меню
+        tput cuu $count 2>/dev/null
+        for ((i=0; i<count; i++)); do
+            tput el 2>/dev/null
+            if [ $i -eq $selected ]; then
+                echo -e "  ${GREEN}▶ ${options[$i]}${NC}"
+            else
+                echo -e "    ${options[$i]}"
+            fi
+        done
+    done
+
+    tput cnorm 2>/dev/null  # показываем курсор
+    trap - INT TERM
+    echo ""
+
+    SELECTED_INDEX=$selected
+    SELECTED_VALUE="${options[$selected]}"
+}
+
+# =============================================
+# Интерактивный выбор бэкапа из ./backups/
+# =============================================
+select_backup_interactive() {
+    local dir="$SCRIPT_DIR/backups"
+
+    if [ ! -d "$dir" ]; then
+        echo -e "${RED}Директория backups не найдена${NC}"
+        exit 1
+    fi
+
+    # Список бэкапов от новых к старым
+    local backup_dirs=()
+    while IFS= read -r line; do
+        backup_dirs+=("$line")
+    done < <(find "$dir" -maxdepth 1 -type d -name "backup_*" | sort -r)
+
+    if [ ${#backup_dirs[@]} -eq 0 ]; then
+        echo -e "${RED}Бэкапы не найдены в $dir${NC}"
+        exit 1
+    fi
+
+    # Формируем строки для отображения: дата + статус из backup_info.txt
+    local options=()
+    for d in "${backup_dirs[@]}"; do
+        local name
+        name=$(basename "$d")
+        # Форматируем дату: backup_20250629_174231 → 2025-06-29 17:42
+        local ts="${name#backup_}"
+        local date_fmt="${ts:0:4}-${ts:4:2}-${ts:6:2} ${ts:9:2}:${ts:11:2}"
+        local info=""
+        if [ -f "$d/backup_info.txt" ]; then
+            local sm sr
+            sm=$(grep "^Статус main:" "$d/backup_info.txt" 2>/dev/null | awk '{print $NF}')
+            sr=$(grep "^Статус ru:"  "$d/backup_info.txt" 2>/dev/null | awk '{print $NF}')
+            [ -n "$sm" ] && info+="  main:${sm}"
+            [ -n "$sr" ] && info+="  ru:${sr}"
+        fi
+        options+=("${date_fmt}${info}")
+    done
+
+    select_arrow "Выберите бэкап для восстановления:" "${options[@]}"
+
+    BACKUP_PATH="${backup_dirs[$SELECTED_INDEX]}"
+    echo -e "${GREEN}Выбран: $(basename "$BACKUP_PATH")${NC}"
+}
+
+# =============================================
+# Выбор цели восстановления (стрелками)
+# =============================================
 select_restore_target() {
     local backup_path="$1"
-    
-    # Проверяем наличие директорий в бэкапе
+
     local has_main=false
     local has_ru=false
     [ -d "$backup_path/main" ] && has_main=true
-    [ -d "$backup_path/ru" ] && has_ru=true
-    
+    [ -d "$backup_path/ru" ]   && has_ru=true
+
     if ! $has_main && ! $has_ru; then
         echo -e "${RED}В бэкапе нет директорий main/ или ru/${NC}"
         exit 1
     fi
-    
-    echo -e "${BLUE}Доступные данные в бэкапе:${NC}"
-    $has_main && echo "  [✓] main — полная инфраструктура"
-    $has_ru && echo "  [✓] ru   — antizapret (/root/antizapret)"
-    echo ""
-    
-    # Формируем подсказку выбора
-    local prompt="Ваш выбор [1"
-    $has_ru && prompt+=" / 2"
-    $has_main && $has_ru && prompt+=" / 3"
-    prompt+="]: "
-    
-    # Интерактивный выбор
-    local choice
-    while true; do
-        echo -e "${BLUE}Выберите что восстанавливать:${NC}"
-        echo "  1) main   — основной сервер"
-        $has_ru && echo "  2) ru     — российский сервер (antizapret)"
-        $has_main && $has_ru && echo "  3) оба    — оба сервера"
-        echo -n "$prompt"
-        read -r choice
-        
-        case "$choice" in
-            1) RESTORE_TARGET="main"; break ;;
-            2) if $has_ru; then RESTORE_TARGET="ru"; break; else echo -e "${YELLOW}В бэкапе нет ru/${NC}"; fi ;;
-            3) if $has_main && $has_ru; then RESTORE_TARGET="both"; break; else echo -e "${YELLOW}Недостаточно данных для восстановления обоих${NC}"; fi ;;
-            *) echo -e "${YELLOW}Неверный выбор${NC}" ;;
-        esac
-    done
-    
+
+    # Автовыбор если есть только один вариант
+    if $has_main && ! $has_ru; then
+        RESTORE_TARGET="main"
+        echo -e "${GREEN}Автовыбор: main (ru отсутствует в бэкапе)${NC}"
+        return
+    fi
+    if ! $has_main && $has_ru; then
+        RESTORE_TARGET="ru"
+        echo -e "${GREEN}Автовыбор: ru (main отсутствует в бэкапе)${NC}"
+        return
+    fi
+
+    # Оба доступны — выбираем стрелками
+    local options=(
+        "main  — основной сервер (${DEST_HOST:-?})"
+        "ru    — российский сервер (${DEST_HOST_RU:-?}) — antizapret, myshows_proxy"
+        "оба   — оба сервера"
+    )
+
+    select_arrow "Что восстанавливать?" "${options[@]}"
+
+    case $SELECTED_INDEX in
+        0) RESTORE_TARGET="main" ;;
+        1) RESTORE_TARGET="ru"   ;;
+        2) RESTORE_TARGET="both" ;;
+    esac
+
     echo -e "${GREEN}Выбрано: $RESTORE_TARGET${NC}"
 }
 
@@ -429,32 +560,6 @@ install_amneziawg() {
     "
 }
 
-# Проверка аргументов
-check_arguments() {
-    if [ $# -lt 1 ]; then
-        echo -e "${RED}Использование: $0 <backup_path>${NC}"
-        echo ""
-        echo "Аргументы:"
-        echo "  backup_path  - Путь к директории бэкапа (обязательно)"
-        echo ""
-        echo "Примеры:"
-        echo "  $0 ./backups/backup_20250629_174231"
-        exit 1
-    fi
-    
-    BACKUP_PATH="$1"
-    
-    if [ ! -d "$BACKUP_PATH" ]; then
-        echo -e "${RED}Бэкап не найден: $BACKUP_PATH${NC}"
-        exit 1
-    fi
-    
-    echo -e "${BLUE}Используем параметры:${NC}"
-    echo "  Бэкап: $BACKUP_PATH"
-    echo "  Сервер: $DEST_HOST"
-    echo "  Пользователь: $NEW_USER"
-    echo "  SSH ключ: $SSH_KEY"
-}
 
 fix_system_locale() {
     local host="${1:-$DEST_HOST}"
@@ -847,21 +952,17 @@ transfer_nginx_certs() {
 }
 
 install_go() {
-    echo "Устанавливаем Go и настраиваем окружение"
-    
-    ssh -i "$SSH_KEY" "$NEW_USER@$DEST_HOST" << 'EOF'
-# Устанавливаем Go (если ещё не установлен)
+    local go_ver="${GO_VERSION:-go1.22.4}"
+    echo "Устанавливаем Go ${go_ver}..."
+
+    ssh -i "$SSH_KEY" "$NEW_USER@$DEST_HOST" << EOF
 if ! command -v go &>/dev/null; then
-    wget -q https://go.dev/dl/go1.22.4.linux-amd64.tar.gz
+    wget -q https://go.dev/dl/${go_ver}.linux-amd64.tar.gz
     sudo rm -rf /usr/local/go
-    sudo tar -C /usr/local -xzf go1.22.4.linux-amd64.tar.gz
-    rm go1.22.4.linux-amd64.tar.gz
+    sudo tar -C /usr/local -xzf ${go_ver}.linux-amd64.tar.gz
+    rm ${go_ver}.linux-amd64.tar.gz
 fi
-
-# Явно добавляем PATH для текущей сессии
-export PATH="$PATH:/usr/local/go/bin"
-
-# Проверяем установку
+export PATH="\$PATH:/usr/local/go/bin"
 go version || { echo "ОШИБКА: Go не работает!"; exit 1; }
 EOF
 }
@@ -1254,58 +1355,89 @@ update_migrate_env_after_restore() {
 }
 
 main() {
+    RESTORE_LOG=()
 
-    [ $# -lt 1 ] && { echo -e "${RED}Использование: $0 <backup_path>${NC}"; exit 1; }
-    [ ! -d "$1" ] && { echo -e "${RED}Бэкап не найден: $1${NC}"; exit 1; }
-    
-    BACKUP_PATH="$1"
+    # Парсинг аргументов: [backup_path] [--target main|ru|both]
+    local target_arg=""
+    local backup_arg=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --target=*) target_arg="${1#--target=}"; shift ;;
+            --target)   target_arg="$2"; shift 2 ;;
+            --help|-h)
+                echo "Использование: $0 [backup_path] [--target main|ru|both]"
+                echo "  backup_path   путь к бэкапу (если не указан — интерактивный выбор)"
+                echo "  --target      пропустить выбор цели"
+                exit 0
+                ;;
+            -*) echo -e "${RED}Неизвестный аргумент: $1${NC}"; exit 1 ;;
+            *)  backup_arg="$1"; shift ;;
+        esac
+    done
+
     check_required_files
-    select_restore_target "$BACKUP_PATH"
+    check_sshpass
+
+    # Выбор бэкапа
+    if [ -n "$backup_arg" ]; then
+        [ ! -d "$backup_arg" ] && { echo -e "${RED}Бэкап не найден: $backup_arg${NC}"; exit 1; }
+        BACKUP_PATH="$backup_arg"
+        echo -e "${GREEN}Бэкап: $BACKUP_PATH${NC}"
+    else
+        select_backup_interactive
+    fi
+
+    echo -e "${BLUE}\n=== ВОССТАНОВЛЕНИЕ VPS ИЗ БЭКАПА ===${NC}"
+    echo "  Бэкап:        $BACKUP_PATH"
+    echo "  Сервер main:  ${DEST_HOST:-не задан}"
+    echo "  Сервер ru:    ${DEST_HOST_RU:-не задан}"
+    echo "  Пользователь: $NEW_USER"
+    echo ""
+
+    # Выбор цели
+    if [ -n "$target_arg" ]; then
+        RESTORE_TARGET="$target_arg"
+        echo -e "${GREEN}Цель (из аргумента): $RESTORE_TARGET${NC}"
+    else
+        select_restore_target "$BACKUP_PATH"
+    fi
 
     # Сохраняем оригинальные значения ДО восстановления
     OLD_SOURCE_HOST="$SOURCE_HOST"
     OLD_DEST_HOST="$DEST_HOST"
-    OLD_SOURCE_HOST_RU="$SOURCE_HOST_RU"
-    OLD_DEST_HOST_RU="$DEST_HOST_RU"
-    
-    # Восстановление ru-сервера (antizapret, myshows_proxy)
+    OLD_SOURCE_HOST_RU="${SOURCE_HOST_RU:-}"
+    OLD_DEST_HOST_RU="${DEST_HOST_RU:-}"
+
+    # Восстановление ru-сервера
     if [[ "$RESTORE_TARGET" == "ru" || "$RESTORE_TARGET" == "both" ]]; then
-        [ -z "$DEST_HOST_RU" ] && { echo -e "${RED}Не задан DEST_HOST_RU в migrate.env${NC}"; exit 1; }
+        [ -z "${DEST_HOST_RU:-}" ] && { echo -e "${RED}Не задан DEST_HOST_RU в migrate.env${NC}"; exit 1; }
         restore_antizapret_ru "$DEST_HOST_RU" "$BACKUP_PATH"
         myshows_proxy_ru "$DEST_HOST_RU" "$BACKUP_PATH"
-        [ "$RESTORE_TARGET" == "ru" ] && exit 0  # если только ru — завершаем
+        if [ "$RESTORE_TARGET" == "ru" ]; then
+            print_summary
+            exit 0
+        fi
     fi
 
-    echo -e "${BLUE}\n=== НАЧАЛО ВОССТАНОВЛЕНИЯ VPS ИЗ БЭКАПА ===${NC}"
-    
-    check_required_files
-    check_arguments "$@"
-    
-    # Проверка подключения к целевому серверу
+    # Проверка подключения к основному серверу
     if ! safe_sshpass "root@$DEST_HOST" "echo 'Тестовое подключение'" "$DEST_ROOT_PASSWORD"; then
         echo -e "${RED}Не удалось подключиться к $DEST_HOST${NC}" >&2
         exit 1
     fi
 
-    # Выполнение функций по флагам
     run_if_enabled "setup_ssh_keys"
     run_if_enabled "fix_system_locale"
     run_if_enabled "create_user"
-
-    # Базовые настройки
     run_if_enabled "install_base_packages"
     run_if_enabled "setup_oh_my_zsh"
     run_if_enabled "install_pyenv"
     run_if_enabled "install_poetry"
     run_if_enabled "setup_swap"
-
-    # Восстановление данных из бэкапа
     run_if_enabled "install_lampac"
     run_if_enabled "transfer_nginx_certs"
     run_if_enabled "setup_marzban"
-    run_if_enabled "setup_fail2ban"  # Добавлен вызов функции восстановления fail2ban
-
-    # Установка и настройка приложений
+    run_if_enabled "setup_fail2ban"
     run_if_enabled "install_go"
     run_if_enabled "setup_antizapret"
     run_if_enabled "setup_numparser"
@@ -1313,30 +1445,25 @@ main() {
     run_if_enabled "setup_3proxy"
     run_if_enabled "setup_glances"
 
-    # Обновление DNS только в production-режиме
     if [ "$DEBUG" = "False" ]; then
         run_if_enabled "update_dns_records"
         update_migrate_env_after_restore
     fi
 
-    # Очистка
     run_if_enabled "cleanup"
 
+    print_summary
+
     echo -e "${PURPLE}\n=== ВОССТАНОВЛЕНИЕ ЗАВЕРШЕНО ===${NC}"
-    echo "Доступ к серверу:"
     echo "SSH: ssh -i $SSH_KEY $NEW_USER@$DEST_HOST"
-    echo "Пароль пользователя: $NEW_USER_PASSWORD"
+    echo "Пароль: $NEW_USER_PASSWORD"
 
-    if [ "$DEBUG" = "True" ] || [ "$RUN_UPDATE_DNS_RECORDS" = "False" ] || [ "$DNS_UPDATED" = "false" ]; then
-        echo -e "\n${CYAN}=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===${NC}"
-        echo -e "${YELLOW}Следующие домены нужно перенаправить на новый IP ($DEST_HOST):${NC}"
-
+    if [ "$DEBUG" = "True" ] || [ "$RUN_UPDATE_DNS_RECORDS" = "False" ] || [ "${DNS_UPDATED:-}" = "false" ]; then
+        echo -e "\n${YELLOW}=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ===${NC}"
         for domain in $DOMAINS_TO_UPDATE_MAIN; do
-            echo -e "  • ${GREEN}$domain${NC}"
-            echo -e "  • ${GREEN}www.$domain${NC}"
+            echo -e "  • ${GREEN}$domain${NC} → $DEST_HOST"
+            echo -e "  • ${GREEN}www.$domain${NC} → $DEST_HOST"
         done
-
-        echo -e "\n${RED}❗ Это важно сделать сразу после восстановления!${NC}\n"
     fi
 }
 
