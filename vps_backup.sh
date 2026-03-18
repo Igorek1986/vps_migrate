@@ -90,6 +90,33 @@ backup_item() {
     fi
 }
 
+# === Полный архив Lampac (однократно, хранится отдельно от ротируемых бэкапов) ===
+backup_lampac_archive() {
+    local archive="$SCRIPT_DIR/backups/lampac_full.tar.gz"
+
+    if [ -f "$archive" ]; then
+        local size
+        size=$(du -sh "$archive" 2>/dev/null | cut -f1)
+        echo -e "${SUCCESS_COLOR}✓ lampac_full.tar.gz уже есть ($size) — пропускаем${NC}"
+        return 0
+    fi
+
+    echo "Создаём полный архив /home/lampac (первый раз, может занять несколько минут)..."
+
+    if ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+        root@"$SOURCE_HOST" \
+        "tar czf - -C /home/lampac ." \
+        > "$archive" 2>/dev/null; then
+        local size
+        size=$(du -sh "$archive" 2>/dev/null | cut -f1)
+        echo -e "${SUCCESS_COLOR}✓ lampac_full.tar.gz создан ($size)${NC}"
+    else
+        rm -f "$archive"
+        echo -e "${WARNING_COLOR}⚠ Не удалось создать архив Lampac${NC}"
+        FAILED_ITEMS=$((FAILED_ITEMS + 1))
+    fi
+}
+
 # === Бэкап основного сервера ===
 backup_main() {
     local backup_path="$1"
@@ -116,6 +143,7 @@ backup_main() {
         "/home/lampac/module/TimecodeUser/:/home/lampac/module/TimecodeUser/"
         "/home/$NEW_USER/movies-api:/home/$NEW_USER/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
+        "/etc/systemd/system/lampac.service:/etc/systemd/system/"
         "/etc/systemd/system/numparser.service:/etc/systemd/system/"
         "/etc/systemd/system/movies-api.service:/etc/systemd/system/"
         "/etc/systemd/system/glances.service:/etc/systemd/system/"
@@ -172,6 +200,7 @@ create_backup() {
     if [ -n "${SOURCE_HOST:-}" ]; then
         echo -e "${HEADER_COLOR}--- Основной сервер ($SOURCE_HOST) ---${NC}"
         backup_main "$backup_path"
+        backup_lampac_archive
     else
         echo -e "${WARNING_COLOR}SOURCE_HOST не задан — пропускаем${NC}"
     fi

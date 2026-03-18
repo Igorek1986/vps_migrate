@@ -833,18 +833,66 @@ EOF
 }
 
 install_lampac() {
-    echo "Устанавливаем Lampac из-под root"
-    ssh -i "$SSH_KEY" root@"$DEST_HOST" "curl -L -k -s https://lampac.sh | bash"
+    local archive="$SCRIPT_DIR/backups/lampac_full.tar.gz"
 
-    # Копируем файлы из бэкапа
-    if [ -d "$BACKUP_PATH/main/home/lampac" ]; then
-        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/home/lampac/" root@"$DEST_HOST":/home/lampac/
-    else
-        echo -e "${YELLOW}Директория lampac не найдена в бэкапе${NC}"
+    if [ ! -f "$archive" ]; then
+        echo -e "${RED}Архив lampac_full.tar.gz не найден: $archive${NC}"
+        echo -e "${YELLOW}Запустите бэкап чтобы создать архив, затем повторите восстановление${NC}"
+        return 1
     fi
 
-    # Перезагружаем сервисы
-    safe_ssh root@"$DEST_HOST" "systemctl restart lampac"
+    local size
+    size=$(du -sh "$archive" 2>/dev/null | cut -f1)
+    echo "Архив: $archive ($size)"
+
+    # Устанавливаем dotnet 9 runtime если не установлен
+    safe_ssh root@"$DEST_HOST" "
+        if ! /usr/bin/dotnet --info 2>/dev/null | grep -q 'Version:'; then
+            echo 'Устанавливаем dotnet 9 runtime...'
+            curl -sSL https://dot.net/v1/dotnet-install.sh | \
+                bash -s -- --runtime aspnetcore --version 9.0.12 --install-dir /usr/share/dotnet
+            ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet 2>/dev/null || true
+        else
+            echo 'dotnet уже установлен'
+        fi
+    "
+
+    # Создаём директорию и распаковываем архив прямо из потока (без temp-файла)
+    echo "Распаковываем архив на $DEST_HOST..."
+    safe_ssh root@"$DEST_HOST" "mkdir -p /home/lampac"
+    cat "$archive" | ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
+        root@"$DEST_HOST" "tar xzf - -C /home/lampac"
+
+    # Восстанавливаем службу
+    if [ -f "$BACKUP_PATH/main/etc/systemd/system/lampac.service" ]; then
+        rsync -aq -e "ssh -i $SSH_KEY" \
+            "$BACKUP_PATH/main/etc/systemd/system/lampac.service" \
+            root@"$DEST_HOST":/etc/systemd/system/
+    else
+        echo -e "${YELLOW}lampac.service не найден в бэкапе — создаём${NC}"
+        ssh -i "$SSH_KEY" root@"$DEST_HOST" "cat > /etc/systemd/system/lampac.service << 'EOF'
+[Unit]
+Description=Lampac
+Wants=network.target
+After=network.target
+[Service]
+WorkingDirectory=/home/lampac
+ExecStart=/usr/bin/dotnet Lampac.dll
+Restart=always
+LimitNOFILE=32000
+[Install]
+WantedBy=multi-user.target
+EOF"
+    fi
+
+    # Накатываем актуальные пользовательские файлы поверх архива
+    if [ -d "$BACKUP_PATH/main/home/lampac" ]; then
+        echo "Накатываем актуальные файлы из бэкапа..."
+        rsync -aq -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/home/lampac/" root@"$DEST_HOST":/home/lampac/
+    fi
+
+    safe_ssh root@"$DEST_HOST" "systemctl daemon-reload"
+    echo -e "${GREEN}✓ Lampac восстановлен (disabled/stopped — запустите вручную когда готово)${NC}"
 }
 
 setup_antizapret() {
