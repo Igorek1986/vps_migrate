@@ -195,7 +195,11 @@ NEW_USER: $NEW_USER
 Ошибок: $FAILED_ITEMS из $TOTAL_ITEMS
 EOF
 
-    cleanup_old_backups "$SCRIPT_DIR/backups"
+    if [ $FAILED_ITEMS -eq 0 ]; then
+        cleanup_old_backups "$SCRIPT_DIR/backups"
+    else
+        echo -e "${WARNING_COLOR}Очистка старых бэкапов пропущена — были ошибки${NC}"
+    fi
 
     echo -e "${SUCCESS_COLOR}✓ Готово: $backup_path${NC}"
     echo "Ошибок: $FAILED_ITEMS из $TOTAL_ITEMS"
