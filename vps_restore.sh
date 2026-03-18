@@ -57,7 +57,7 @@ check_required_files() {
     # Обязательные переменные
     required_vars=(
         "DEST_HOST" "DEST_ROOT_PASSWORD" 
-        "NEW_USER" "NEW_USER_PASSWORD" "DOMAINS_TO_UPDATE" 
+        "NEW_USER" "NEW_USER_PASSWORD" "DOMAINS_TO_UPDATE_MAIN" 
         "SWAP_SIZE"
         "BEGET_LOGIN" "BEGET_PASSWORD"
         "DEBUG"
@@ -131,6 +131,304 @@ safe_sshpass() {
     fi
 }
 
+# Выбор цели восстановления
+select_restore_target() {
+    local backup_path="$1"
+    
+    # Проверяем наличие директорий в бэкапе
+    local has_main=false
+    local has_ru=false
+    [ -d "$backup_path/main" ] && has_main=true
+    [ -d "$backup_path/ru" ] && has_ru=true
+    
+    if ! $has_main && ! $has_ru; then
+        echo -e "${RED}В бэкапе нет директорий main/ или ru/${NC}"
+        exit 1
+    fi
+    
+    echo -e "${BLUE}Доступные данные в бэкапе:${NC}"
+    $has_main && echo "  [✓] main — полная инфраструктура"
+    $has_ru && echo "  [✓] ru   — antizapret (/root/antizapret)"
+    echo ""
+    
+    # Формируем подсказку выбора
+    local prompt="Ваш выбор [1"
+    $has_ru && prompt+=" / 2"
+    $has_main && $has_ru && prompt+=" / 3"
+    prompt+="]: "
+    
+    # Интерактивный выбор
+    local choice
+    while true; do
+        echo -e "${BLUE}Выберите что восстанавливать:${NC}"
+        echo "  1) main   — основной сервер"
+        $has_ru && echo "  2) ru     — российский сервер (antizapret)"
+        $has_main && $has_ru && echo "  3) оба    — оба сервера"
+        echo -n "$prompt"
+        read -r choice
+        
+        case "$choice" in
+            1) RESTORE_TARGET="main"; break ;;
+            2) if $has_ru; then RESTORE_TARGET="ru"; break; else echo -e "${YELLOW}В бэкапе нет ru/${NC}"; fi ;;
+            3) if $has_main && $has_ru; then RESTORE_TARGET="both"; break; else echo -e "${YELLOW}Недостаточно данных для восстановления обоих${NC}"; fi ;;
+            *) echo -e "${YELLOW}Неверный выбор${NC}" ;;
+        esac
+    done
+    
+    echo -e "${GREEN}Выбрано: $RESTORE_TARGET${NC}"
+}
+
+myshows_proxy_ru() {
+    local dest_host="$1"
+    local backup_path="$2"
+
+    echo -e "${BLUE}=== ВОССТАНОВЛЕНИЕ myshows_proxy (ru) ===${NC}"
+    
+    if [ ! -d "$backup_path/ru/root/myshows_proxy" ]; then
+        echo -e "${RED}В бэкапе нет /root/myshows_proxy${NC}"
+        return 1
+    fi
+
+    # Копируем данные
+    echo "Копируем /root/myshows_proxy..."
+    rsync -aq -e "ssh -i $SSH_KEY" "$backup_path/ru/root/myshows_proxy/" root@"$dest_host":/root/myshows_proxy/
+
+    # Запускаем install.sh
+    echo "Запускаем install.sh..."
+    ssh -i "$SSH_KEY" root@"$dest_host" "cd /root/myshows_proxy && chmod +x install.sh && ./install.sh"
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ myshows_proxy успешно восстановлен${NC}"
+        return 0
+    else
+        echo -e "${RED}✗ Ошибка при установке myshows_proxy${NC}"
+        return 1
+    fi
+}
+
+restore_antizapret_ru() {
+    local dest_host="$1"
+    local backup_path="$2"
+    
+    echo -e "${BLUE}=== ВОССТАНОВЛЕНИЕ antizapret (ru) ===${NC}"
+    
+    if [ ! -d "$backup_path/ru/root/antizapret" ]; then
+        echo -e "${RED}В бэкапе нет /root/antizapret${NC}"
+        return 1
+    fi
+
+    echo "Исправляем локали на $dest_host..."
+    fix_system_locale "$dest_host"
+
+    # Устанавливаем ядерные модули для производительности
+    install_openvpn_dco "$dest_host"
+    install_amneziawg "$dest_host"
+
+    # Устанавливаем Docker
+    echo "Устанавливаем Docker..."
+    install_docker_if_needed "$dest_host" "root"
+    
+    # Копируем данные
+    echo "Копируем /root/antizapret..."
+    rsync -aq -e "ssh -i $SSH_KEY" "$backup_path/ru/root/antizapret/" root@"$dest_host":/root/antizapret/
+    
+    # Устанавливаем hostname
+    echo "Устанавливаем hostname..."
+    safe_ssh root@"$dest_host" "hostnamectl set-hostname az-local"
+    
+    # Инициализируем Swarm
+    echo "Инициализируем Docker Swarm на $dest_host..."
+    SWARM_TOKEN=$(safe_ssh root@"$dest_host" "
+        if docker info 2>/dev/null | grep -q 'Swarm: active'; then
+            docker swarm join-token worker -q
+        else
+            docker swarm init --advertise-addr $dest_host 2>&1 | grep -oP 'SWMTKN-[0-9a-zA-Z_-]+' || echo 'ERROR'
+        fi
+    ")
+    
+    if [[ "$SWARM_TOKEN" == "ERROR" || -z "$SWARM_TOKEN" ]]; then
+        echo -e "${RED}Ошибка инициализации Swarm${NC}"
+        return 1
+    fi
+    
+    echo -e "${GREEN}✓ Swarm инициализирован на $dest_host${NC}"
+    
+    # Присоединяем основной сервер
+    local target_host=""
+    if [ "$RESTORE_TARGET" = "ru" ]; then
+        target_host="$SOURCE_HOST"
+        echo "Присоединяем старый основной сервер ($SOURCE_HOST) к Swarm..."
+    elif [ "$RESTORE_TARGET" = "both" ]; then
+        target_host="$DEST_HOST"
+        echo "Присоединяем новый основной сервер ($DEST_HOST) к Swarm..."
+    fi
+    
+    if [ -n "$target_host" ]; then
+        if ping -c 1 "$target_host" &>/dev/null; then
+            echo "Устанавливаем Docker на $target_host..."
+            install_docker_if_needed "$target_host" "root"
+            # Присоединяем к сварму
+            safe_ssh root@"$target_host" "
+                docker swarm leave --force 2>/dev/null || true
+                docker swarm join --token $SWARM_TOKEN $dest_host:2377
+            "
+            echo -e "${GREEN}✓ Сервер $target_host присоединён к Swarm${NC}"
+        else
+            echo -e "${YELLOW}⚠ $target_host недоступен, пропускаем присоединение${NC}"
+        fi
+    fi
+    
+    # Аутентификация в Docker Hub
+    if [ -n "$DOCKER_USER" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        echo "Аутентифицируемся в Docker Hub..."
+        safe_ssh root@"$dest_host" "
+            echo '$DOCKER_PASSWORD' | docker login -u '$DOCKER_USER' --password-stdin 2>&1 | grep -q 'Login Succeeded' && \
+            echo '✓ Успешная аутентификация'
+        " | grep -q "✓" || echo -e "${YELLOW}⚠ Аутентификация не удалась${NC}"
+    else
+        echo -e "${YELLOW}⚠ DOCKER_USER/DOCKER_PASSWORD не заданы — возможны ошибки лимита Docker Hub${NC}"
+    fi
+    
+    # Подготовка и деплой стека
+    echo "Подготавливаем и деплоим стек Antizapret..."
+    safe_ssh root@"$dest_host" "
+        cd /root/antizapret
+        
+        # Лейблы узлов
+        docker node update --label-add location=local az-local
+        [ -n \"$target_host\" ] && docker node update --label-add location=world az-world || true
+        
+        # Создаём конфиг-папки
+        docker compose pull
+        docker compose up -d
+        sleep 60
+        docker compose down
+        
+        # Деплой в сварм
+        docker compose config | docker run --rm -i xtrime/antizapret-vpn:5 compose2swarm | \
+        docker stack deploy --prune -c - antizapret
+    "
+
+    # Обновление DNS только в production-режиме
+    if [ "$DEBUG" = "False" ]; then
+        update_dns_records "$dest_host" "$DOMAINS_TO_UPDATE_RU"
+        update_migrate_env_after_restore
+    fi
+    
+    echo -e "${GREEN}✓ Antizapret восстановлен на $dest_host${NC}"
+    echo -e "${CYAN}Статус сервисов:${NC}"
+    safe_ssh root@"$dest_host" "docker service ls --filter name=antizapret"
+}
+
+install_openvpn_dco() {
+    local host="$1"
+    
+    echo "Устанавливаем OpenVPN DCO kernel module на $host..."
+    
+    safe_ssh root@"$host" "
+        export LC_ALL=C LANG=C
+        
+        # Определяем версию Ubuntu
+        UBUNTU_VERSION=\$(lsb_release -rs 2>/dev/null || grep -oP 'VERSION_ID=\"\K[0-9.]+' /etc/os-release | head -1)
+        
+        if [[ \"\$UBUNTU_VERSION\" == \"24.04\" ]]; then
+            echo \"Ubuntu 24.04 — устанавливаем из репозитория...\"
+            apt update -qq
+            apt install -y openvpn-dco-dkms
+        elif [[ \"\$UBUNTU_VERSION\" == \"22.04\" || \"\$UBUNTU_VERSION\" == \"20.04\" ]]; then
+            echo \"Ubuntu \$UBUNTU_VERSION — устанавливаем из .deb...\"
+            apt update -qq
+            apt install -y dkms linux-headers-\$(uname -r) efivar
+            
+            # Скачиваем и устанавливаем пакет вручную
+            DEB_URL=\"http://archive.ubuntu.com/ubuntu/pool/universe/o/openvpn-dco-dkms/openvpn-dco-dkms_0.0+git20231103-1_all.deb\"
+            wget -q \"\$DEB_URL\" -O /tmp/openvpn-dco-dkms.deb && \
+            dpkg -i /tmp/openvpn-dco-dkms.deb || apt --fix-broken install -y
+        else
+            echo \"⚠ Неизвестная версия Ubuntu (\$UBUNTU_VERSION) — пропускаем установку DCO\"
+            exit 0
+        fi
+        
+        # Проверяем установку
+        if modprobe openvpn-dco 2>/dev/null; then
+            echo '✓ OpenVPN DCO kernel module загружен'
+            lsmod | grep openvpn-dco
+        else
+            echo '⚠ Модуль не загружен (требуется перезагрузка для активации)'
+            echo '  Выполните после восстановления: sudo reboot'
+        fi
+    "
+}
+
+install_amneziawg() {
+    local host="$1"
+    
+    echo "Устанавливаем Amnezia WireGuard kernel module на $host..."
+    
+    safe_ssh root@"$host" "
+        export LC_ALL=C LANG=C
+        
+        # Определяем версию Ubuntu
+        UBUNTU_VERSION=\$(lsb_release -rs 2>/dev/null || grep -oP 'VERSION_ID=\"\K[0-9.]+' /etc/os-release | head -1)
+        
+        # Добавляем ключ репозитория Amnezia
+        apt install -y software-properties-common gnupg 2>/dev/null
+        add-apt-repository -y ppa:amnezia/ppa 2>/dev/null || {
+            # Ручное добавление если нет add-apt-repository
+            echo 'deb http://ppa.launchpad.net/amnezia/ppa/ubuntu \$UBUNTU_VERSION main' | \\
+                sed \"s/\\\$UBUNTU_VERSION/\$UBUNTU_VERSION/\" > /etc/apt/sources.list.d/amnezia.list
+            apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 0x7B276667 2>/dev/null || true
+        }
+        
+        if [[ \"\$UBUNTU_VERSION\" == \"24.04\" ]]; then
+            echo \"Ubuntu 24.04 — устанавливаем amneziawg...\"
+            apt update -qq
+            apt install -y amneziawg dkms linux-headers-\$(uname -r)
+        elif [[ \"\$UBUNTU_VERSION\" == \"22.04\" || \"\$UBUNTU_VERSION\" == \"20.04\" ]]; then
+            echo \"Ubuntu \$UBUNTU_VERSION — устанавливаем amneziawg с исходниками ядра...\"
+            apt update -qq
+            
+            # Раскомментируем deb-src в sources.list
+            sed -i 's/^# deb-src/deb-src/' /etc/apt/sources.list 2>/dev/null || true
+            
+            # Устанавливаем зависимости
+            apt install -y dkms linux-headers-\$(uname -r) build-essential libelf-dev
+            
+            # Устанавливаем amneziawg
+            apt install -y amneziawg
+            
+            # Принудительно пересобираем модуль через DKMS
+            dkms install -m amneziawg -v 1.0.0 2>/dev/null || true
+        else
+            echo \"⚠ Неизвестная версия Ubuntu (\$UBUNTU_VERSION) — пропускаем установку amneziawg\"
+            exit 0
+        fi
+        
+        # Загружаем модуль
+        modprobe amneziawg 2>/dev/null || true
+        
+        # Проверяем установку
+        echo '=== Проверка установки ==='
+        if dkms status 2>/dev/null | grep -q amneziawg; then
+            echo '✓ amneziawg зарегистрирован в DKMS'
+        else
+            echo '⚠ amneziawg не найден в DKMS (может потребоваться перезагрузка)'
+        fi
+        
+        if lsmod | grep -q amneziawg; then
+            echo '✓ amneziawg kernel module загружен'
+            echo '  Для активации в Антизапрете выполните:'
+            echo '  docker service update --force antizapret_wireguard-amnezia'
+        else
+            echo '⚠ Модуль не загружен (требуется перезагрузка или перезапуск сервиса)'
+            echo '  Выполните после восстановления:'
+            echo '  sudo reboot'
+            echo '  или'
+            echo '  docker service update --force antizapret_wireguard-amnezia'
+        fi
+    "
+}
+
 # Проверка аргументов
 check_arguments() {
     if [ $# -lt 1 ]; then
@@ -159,10 +457,11 @@ check_arguments() {
 }
 
 fix_system_locale() {
-    echo "Исправляем настройки локалей на целевом сервере ($DEST_HOST)..."
+    local host="${1:-$DEST_HOST}"
+    echo "Исправляем настройки локалей на целевом сервере ($host)..."
     
     # Выполняем команды через SSH на целевом сервере
-    ssh -i "$SSH_KEY" root@"$DEST_HOST" "
+    ssh -i "$SSH_KEY" root@"$host" "
         # Проверяем, установлен ли пакет locales
         if ! dpkg -l | grep -q \"locales\"; then
             echo \"Устанавливаем пакет locales...\"
@@ -271,11 +570,35 @@ install_base_packages() {
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo apt-get install -y zsh tree redis-server nginx zlib1g-dev libbz2-dev libreadline-dev llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev liblzma-dev python3-dev python3-lxml libxslt-dev libffi-dev libssl-dev gnumeric libsqlite3-dev libpq-dev libxml2-dev libxslt1-dev libjpeg-dev libfreetype6-dev libcurl4-openssl-dev supervisor libevent-dev yacc unzip net-tools pipx jq snapd"
     
     # Установка Docker
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh && rm get-docker.sh"
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo usermod -aG docker $NEW_USER"
+    # ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh && rm get-docker.sh"
+    # ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo usermod -aG docker $NEW_USER"
+    install_docker_if_needed "$DEST_HOST" "$NEW_USER"
 
     # Установка certbot
     ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo snap install --classic certbot"
+}
+
+install_docker_if_needed() {
+    local host="$1"
+    local user="$2"
+
+    # Устанавливаем с автоматическим определением необходимости sudo
+    local sudo_cmd=""
+    [ "$user" != "root" ] && sudo_cmd="sudo"
+
+    safe_ssh "$user@$host" "
+        if ! command -v docker &>/dev/null; then
+            curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && \
+            $sudo_cmd sh /tmp/get-docker.sh && \
+            rm -f /tmp/get-docker.sh
+        fi
+        docker --version 
+    "
+
+    # Добавляем в группу docker только для не-root пользователя
+    if [ "$user" != "root" ]; then
+        safe_ssh "$user"@"$host" "sudo usermod -aG docker '$user'"
+    fi
 }
 
 setup_oh_my_zsh() {
@@ -311,8 +634,8 @@ EOF
     
     # Копируем .zshrc из бэкапа
     echo "Копируем .zshrc..."
-    if [ -f "$BACKUP_PATH/home/$NEW_USER/.zshrc" ]; then
-        cp "$BACKUP_PATH/home/$NEW_USER/.zshrc" "$temp_dir/.zshrc"
+    if [ -f "$BACKUP_PATH/main/home/$NEW_USER/.zshrc" ]; then
+        cp "$BACKUP_PATH/main/home/$NEW_USER/.zshrc" "$temp_dir/.zshrc"
         scp -i "$SSH_KEY" "$temp_dir/.zshrc" "$NEW_USER@$DEST_HOST:/home/$NEW_USER/.zshrc"
     else
         echo -e "${YELLOW}Файл .zshrc не найден в бэкапе${NC}"
@@ -320,8 +643,8 @@ EOF
     
     # Копируем .zprofile из бэкапа (если существует)
     echo "Копируем .zprofile..."
-    if [ -f "$BACKUP_PATH/home/$NEW_USER/.zprofile" ]; then
-        cp "$BACKUP_PATH/home/$NEW_USER/.zprofile" "$temp_dir/.zprofile"
+    if [ -f "$BACKUP_PATH/main/home/$NEW_USER/.zprofile" ]; then
+        cp "$BACKUP_PATH/main/home/$NEW_USER/.zprofile" "$temp_dir/.zprofile"
         scp -i "$SSH_KEY" "$temp_dir/.zprofile" "$NEW_USER@$DEST_HOST:/home/$NEW_USER/.zprofile"
     else
         echo "Файл .zprofile не найден в бэкапе, пропускаем"
@@ -397,8 +720,8 @@ install_lampac() {
     ssh -i "$SSH_KEY" root@"$DEST_HOST" "curl -L -k -s https://lampac.sh | bash"
 
     # Копируем файлы из бэкапа
-    if [ -d "$BACKUP_PATH/home/lampac" ]; then
-        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/home/lampac/" root@"$DEST_HOST":/home/lampac/
+    if [ -d "$BACKUP_PATH/main/home/lampac" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/home/lampac/" root@"$DEST_HOST":/home/lampac/
     else
         echo -e "${YELLOW}Директория lampac не найдена в бэкапе${NC}"
     fi
@@ -408,20 +731,76 @@ install_lampac() {
 }
 
 setup_antizapret() {
-    echo "Настраиваем Антизапрет из бэкапа"
+    echo "Настраиваем Антизапрет из бэкапа..."
     
-    safe_ssh $NEW_USER@"$DEST_HOST" "mkdir -p /home/$NEW_USER/antizapret"
-    
-    if [ -d "$BACKUP_PATH/home/$NEW_USER/antizapret" ]; then
-        rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/home/$NEW_USER/antizapret/" \
-            root@"$DEST_HOST":/home/$NEW_USER/antizapret/
-        
-        echo "Запускаем Docker-контейнеры..."
-        safe_ssh $NEW_USER@"$DEST_HOST" \
-            "cd /home/$NEW_USER/antizapret && docker compose pull && docker compose build && docker compose up -d && docker system prune -f"
+    # Копируем данные
+    safe_ssh root@"$DEST_HOST" "mkdir -p /home/$NEW_USER/antizapret"
+    if [ -d "$BACKUP_PATH/main/home/$NEW_USER/antizapret" ]; then
+        rsync -aq -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/home/$NEW_USER/antizapret/" root@"$DEST_HOST":/home/$NEW_USER/antizapret/
+        safe_ssh root@"$DEST_HOST" "chown -R $NEW_USER:$NEW_USER /home/$NEW_USER/antizapret"
     else
         echo -e "${YELLOW}Директория antizapret не найдена в бэкапе${NC}"
+        return 0
+    fi
+    
+    # Проверяем: есть ли активный сварм на существующем RU-сервере?
+    local ru_host="${SOURCE_HOST_RU:-$DEST_HOST_RU}"
+    local swarm_active=false
+    
+    if [ -n "$ru_host" ] && safe_ssh root@"$ru_host" "
+        export LC_ALL=C LANG=C
+        docker info 2>/dev/null | grep -q 'Swarm: active' && \
+        docker node ls 2>/dev/null | grep -q 'az-local'
+    " 2>/dev/null; then
+        swarm_active=true
+    fi
+    
+    if [ "$swarm_active" = true ]; then
+        echo "✓ Обнаружен активный Swarm на $ru_host (менеджер: az-local)"
+        
+        # Получаем токен
+        local swarm_token
+        swarm_token=$(safe_ssh root@"$ru_host" "
+            export LC_ALL=C LANG=C
+            docker swarm join-token worker -q
+        ")
+        
+        if [ -n "$swarm_token" ]; then
+            echo "  → Присоединяемся к сварму как воркер..."
+            safe_ssh root@"$DEST_HOST" "
+                export LC_ALL=C LANG=C
+                docker swarm leave --force 2>/dev/null || true
+                docker swarm join --token $swarm_token $ru_host:2377
+                hostnamectl set-hostname az-world
+                echo '✓ Присоединён к сварму, hostname: az-world'
+            "
+            echo -e "${GREEN}✓ Антизапрет готов как воркер Swarm${NC}"
+            echo -e "${YELLOW}💡 Стек деплоится на менеджере (az-local)${NC}"
+        else
+            echo -e "${RED}✗ Не удалось получить токен присоединения${NC}"
+            swarm_active=false
+        fi
+    fi
+    
+    # Локальный режим (если нет сварма или ошибка получения токена)
+    if [ "$swarm_active" = false ]; then
+        echo "⚠ Swarm недоступен — запускаем в локальном режиме"
+        
+        # Устанавливаем ядерные модули
+        install_openvpn_dco "$DEST_HOST"
+        install_amneziawg "$DEST_HOST"
+        
+        # Запускаем локально
+        safe_ssh $NEW_USER@"$DEST_HOST" "
+            export LC_ALL=C LANG=C
+            cd ~/antizapret
+            docker compose pull 2>/dev/null || true
+            docker compose up -d
+            sleep 15
+            docker compose ps
+        "
+        
+        echo -e "${GREEN}✓ Антизапрет запущен локально с ядерными модулями${NC}"
     fi
 }
 
@@ -433,31 +812,31 @@ transfer_nginx_certs() {
     safe_ssh root@"$DEST_HOST" "mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled"
 
     # nginx.conf
-    if [ -f "$BACKUP_PATH/etc/nginx/nginx.conf" ]; then
-        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/etc/nginx/nginx.conf" root@"$DEST_HOST":/etc/nginx/
+    if [ -f "$BACKUP_PATH/main/etc/nginx/nginx.conf" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/nginx/nginx.conf" root@"$DEST_HOST":/etc/nginx/
     else
         echo -e "${YELLOW}Файл nginx.conf не найден в бэкапе${NC}"
     fi
     
     # sites-available
-    if [ -d "$BACKUP_PATH/etc/nginx/sites-available" ]; then
-        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/etc/nginx/sites-available/" root@"$DEST_HOST":/etc/nginx/sites-available/
+    if [ -d "$BACKUP_PATH/main/etc/nginx/sites-available" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/nginx/sites-available/" root@"$DEST_HOST":/etc/nginx/sites-available/
     else
         echo -e "${YELLOW}Директория sites-available не найдена в бэкапе${NC}"
     fi
     
     # sites-enabled
-    if [ -d "$BACKUP_PATH/etc/nginx/sites-enabled" ]; then
-        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/etc/nginx/sites-enabled/" root@"$DEST_HOST":/etc/nginx/sites-enabled/
+    if [ -d "$BACKUP_PATH/main/etc/nginx/sites-enabled" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/nginx/sites-enabled/" root@"$DEST_HOST":/etc/nginx/sites-enabled/
     else
         echo -e "${YELLOW}Директория sites-enabled не найдена в бэкапе${NC}"
     fi
     
     # Сертификаты Let's Encrypt
     echo "Копируем сертификаты Let's Encrypt..."
-    if [ -d "$BACKUP_PATH/etc/letsencrypt" ]; then
+    if [ -d "$BACKUP_PATH/main/etc/letsencrypt" ]; then
         safe_ssh root@"$DEST_HOST" "mkdir -p /etc/letsencrypt"
-        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/etc/letsencrypt/" root@"$DEST_HOST":/etc/letsencrypt/
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/letsencrypt/" root@"$DEST_HOST":/etc/letsencrypt/
     else
         echo -e "${YELLOW}Директория letsencrypt не найдена в бэкапе${NC}"
     fi
@@ -497,11 +876,11 @@ setup_numparser() {
     scp -i "$SSH_KEY" numparser_config.yml $NEW_USER@"$DEST_HOST":/home/$NEW_USER/NUMParser/config.yml
     
     # Копируем базу данных из бэкапа
-    if [ -f "$BACKUP_PATH/home/$NEW_USER/NUMParser/db/numparser.db" ]; then
+    if [ -f "$BACKUP_PATH/main/home/$NEW_USER/NUMParser/db/numparser.db" ]; then
         echo "Копируем базу данных numparser.db..."
         safe_ssh $NEW_USER@"$DEST_HOST" "mkdir -p /home/$NEW_USER/NUMParser/db"
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/home/$NEW_USER/NUMParser/db/numparser.db" \
+            "$BACKUP_PATH/main/home/$NEW_USER/NUMParser/db/numparser.db" \
             $NEW_USER@"$DEST_HOST":/home/$NEW_USER/NUMParser/db/
     else
         echo -e "${YELLOW}Файл базы данных numparser.db не найден в бэкапе${NC}"
@@ -518,10 +897,10 @@ setup_numparser() {
     "
 
 
-    if [ -f "$BACKUP_PATH/etc/systemd/system/numparser.service" ]; then
+    if [ -f "$BACKUP_PATH/main/etc/systemd/system/numparser.service" ]; then
         echo "Копируем numparser.service..."
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/etc/systemd/system/numparser.service" \
+            "$BACKUP_PATH/main/etc/systemd/system/numparser.service" \
             root@"$DEST_HOST":/etc/systemd/system/
         safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start numparser && sudo systemctl enable numparser"
     else
@@ -539,10 +918,10 @@ setup_movies_api() {
     scp -i "$SSH_KEY" movies-api.env $NEW_USER@"$DEST_HOST":/home/$NEW_USER/movies-api/.env
     
     # Копируем базу данных из бэкапа (если есть)
-    if [ -f "$BACKUP_PATH/home/$NEW_USER/movies-api/db.sqlite3" ]; then
+    if [ -f "$BACKUP_PATH/main/home/$NEW_USER/movies-api/db.sqlite3" ]; then
         echo "Копируем базу данных movies-api..."
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/home/$NEW_USER/movies-api/db.sqlite3" \
+            "$BACKUP_PATH/main/home/$NEW_USER/movies-api/db.sqlite3" \
             $NEW_USER@"$DEST_HOST":/home/$NEW_USER/movies-api/
     fi
     
@@ -556,10 +935,10 @@ setup_movies_api() {
         }
     "
 
-    if [ -f "$BACKUP_PATH/etc/systemd/system/movies-api.service" ]; then
+    if [ -f "$BACKUP_PATH/main/etc/systemd/system/movies-api.service" ]; then
         echo "Копируем movies-api.service..."
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/etc/systemd/system/movies-api.service" \
+            "$BACKUP_PATH/main/etc/systemd/system/movies-api.service" \
             root@"$DEST_HOST":/etc/systemd/system/
         safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start movies-api && sudo systemctl enable movies-api"
     else
@@ -576,11 +955,11 @@ setup_3proxy() {
     safe_ssh $NEW_USER@"$DEST_HOST" "cd 3proxy && ln -s Makefile.Linux Makefile && make && sudo make install"
     
     # Копируем конфиг из бэкапа
-    if [ -f "$BACKUP_PATH/etc/3proxy/3proxy.cfg" ]; then
+    if [ -f "$BACKUP_PATH/main/etc/3proxy/3proxy.cfg" ]; then
         echo "Копируем конфигурацию 3proxy..."
         safe_ssh $NEW_USER@"$DEST_HOST" "sudo mkdir -p /etc/3proxy/"
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/etc/3proxy/3proxy.cfg" \
+            "$BACKUP_PATH/main/etc/3proxy/3proxy.cfg" \
             root@"$DEST_HOST":/etc/3proxy/3proxy.cfg
     else
         echo -e "${YELLOW}Файл конфигурации 3proxy не найден в бэкапе${NC}"
@@ -595,10 +974,10 @@ setup_glances() {
     
     safe_ssh $NEW_USER@"$DEST_HOST" "pipx install glances && pipx inject glances fastapi uvicorn jinja2 || true"
 
-    if [ -f "$BACKUP_PATH/etc/systemd/system/glances.service" ]; then
+    if [ -f "$BACKUP_PATH/main/etc/systemd/system/glances.service" ]; then
         echo "Копируем glances.service..."
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/etc/systemd/system/glances.service" \
+            "$BACKUP_PATH/main/etc/systemd/system/glances.service" \
             root@"$DEST_HOST":/etc/systemd/system/
         safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start glances && sudo systemctl enable glances"
     else
@@ -647,9 +1026,9 @@ setup_marzban() {
     echo "Копируем данные Marzban из бэкапа..."
     
     # /var/lib/marzban
-    if [ -d "$BACKUP_PATH/var/lib/marzban" ]; then
+    if [ -d "$BACKUP_PATH/main/var/lib/marzban" ]; then
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/var/lib/marzban/" \
+            "$BACKUP_PATH/main/var/lib/marzban/" \
             root@"$DEST_HOST":/var/lib/marzban/ || {
                 echo -e "${RED}Ошибка копирования данных Marzban${NC}" >&2
                 return 1
@@ -659,9 +1038,9 @@ setup_marzban() {
     fi
 
     # /opt/marzban/.env
-    if [ -f "$BACKUP_PATH/opt/marzban/.env" ]; then
+    if [ -f "$BACKUP_PATH/main/opt/marzban/.env" ]; then
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/opt/marzban/.env" \
+            "$BACKUP_PATH/main/opt/marzban/.env" \
             root@"$DEST_HOST":/opt/marzban/.env || {
                 echo -e "${RED}Ошибка копирования .env файла${NC}" >&2
                 return 1
@@ -700,23 +1079,33 @@ setup_fail2ban() {
     
     # Устанавливаем fail2ban если еще не установлен
     safe_ssh root@"$DEST_HOST" "apt-get install -y fail2ban"
+
+    # Копируем /usr/local/bin/ban
+    if [ -f "$BACKUP_PATH/main//usr/local/bin/ban" ]; then
+        echo "Копируем ban..."
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$BACKUP_PATH/main/usr/local/bin/ban" \
+            root@"$DEST_HOST":/usr/local/bin/ban
+    else
+        echo -e "${YELLOW}Файл ban не найден в бэкапе${NC}"
+    fi
     
     # Копируем jail.local
-    if [ -f "$BACKUP_PATH/etc/fail2ban/jail.local" ]; then
+    if [ -f "$BACKUP_PATH/main/etc/fail2ban/jail.local" ]; then
         echo "Копируем jail.local..."
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/etc/fail2ban/jail.local" \
+            "$BACKUP_PATH/main/etc/fail2ban/jail.local" \
             root@"$DEST_HOST":/etc/fail2ban/
     else
         echo -e "${YELLOW}Файл jail.local не найден в бэкапе${NC}"
     fi
     
     # Копируем фильтры
-    if [ -d "$BACKUP_PATH/etc/fail2ban/filter.d" ]; then
+    if [ -d "$BACKUP_PATH/main/etc/fail2ban/filter.d" ]; then
         echo "Копируем фильтры..."
         safe_ssh root@"$DEST_HOST" "mkdir -p /etc/fail2ban/filter.d"
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/etc/fail2ban/filter.d/" \
+            "$BACKUP_PATH/main/etc/fail2ban/filter.d/" \
             root@"$DEST_HOST":/etc/fail2ban/filter.d/
     else
         echo -e "${YELLOW}Директория filter.d не найдена в бэкапе${NC}"
@@ -743,13 +1132,15 @@ cleanup() {
 }
 
 update_dns_records() {
+    local target_host="${1:-$DEST_HOST}"
+    local domains="${2:-$DOMAINS_TO_UPDATE_MAIN}"
+
     if [ "$DEBUG" = "True" ]; then
         echo -e "\n${YELLOW}=== ПРОПУСК: Обновление DNS (режим отладки) ===${NC}"
         return 0
     fi
 
-    echo -e "\n${BLUE}=== ОБНОВЛЕНИЕ DNS ЗАПИСЕЙ ===${NC}"
-    echo "Используем IP из DEST_HOST: $DEST_HOST"
+    echo -e "\n${BLUE}=== ОБНОВЛЕНИЕ DNS: $target_host ===${NC}"
 
     # Кодируем логин и пароль для URL
     local encoded_login
@@ -759,11 +1150,11 @@ update_dns_records() {
 
     local all_success=true
 
-    for domain in $DOMAINS_TO_UPDATE; do
+    for domain in $domains; do
         echo "Обновляем A-запись для $domain..."
 
         # Формируем JSON и кодируем его
-        local json_data="{\"fqdn\":\"$domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$DEST_HOST\"}]}}"
+        local json_data="{\"fqdn\":\"$domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$target_host\"}]}}"
         local encoded_data
         encoded_data=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$json_data")
 
@@ -782,7 +1173,7 @@ update_dns_records() {
         # Обновляем www-поддомен
         local www_domain="www.$domain"
         echo "Обновляем A-запись для $www_domain..."
-        local www_json_data="{\"fqdn\":\"$www_domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$DEST_HOST\"}]}}"
+        local www_json_data="{\"fqdn\":\"$www_domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$target_host\"}]}}"
         local www_encoded_data
         www_encoded_data=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$www_json_data")
 
@@ -831,55 +1222,64 @@ setup_swap() {
 
 # Автоматическое обновление migrate.env после успешного восстановления
 update_migrate_env_after_restore() {
-    echo -e "${BLUE}=== ОБНОВЛЕНИЕ migrate.env ПОСЛЕ ВОССТАНОВЛЕНИЯ ===${NC}"
-    
     local migrate_file="$SCRIPT_DIR/migrate.env"
     
-    # Проверяем, что файл существует
-    if [ ! -f "$migrate_file" ]; then
-        echo -e "${RED}Ошибка: файл migrate.env не найден для обновления${NC}"
-        return 1
+    [ ! -f "$migrate_file" ] && { echo -e "${RED}migrate.env не найден${NC}"; return 1; }
+    
+    # Бэкап конфигурации
+    cp "$migrate_file" "$migrate_file.pre-restore-$(date +%Y%m%d_%H%M%S)"
+    
+    echo -e "${BLUE}=== ОБНОВЛЕНИЕ migrate.env ===${NC}"
+    
+    # Обновляем основной сервер если восстанавливался
+    if [[ "$RESTORE_TARGET" == "main" || "$RESTORE_TARGET" == "both" ]]; then
+        if [[ "$OLD_DEST_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            sed -i "s|^SOURCE_HOST=.*|SOURCE_HOST=$OLD_DEST_HOST|" "$migrate_file"
+            sed -i "s|^DEST_HOST=.*|DEST_HOST=|" "$migrate_file"
+            echo -e "${GREEN}✓ Основной сервер: SOURCE_HOST ← $OLD_DEST_HOST, DEST_HOST очищен${NC}"
+        fi
     fi
     
-    # Создаем бэкап текущей конфигурации
-    local backup_file="$migrate_file.pre-restore-$(date +%Y%m%d_%H%M%S)"
-    cp "$migrate_file" "$backup_file"
-    echo -e "${INFO_COLOR}Создан бэкап конфигурации: $backup_file${NC}"
-    
-    # Сохраняем текущие значения для логгирования
-    local old_source=$(grep "^SOURCE_HOST=" "$migrate_file" | cut -d'=' -f2- | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
-    local old_dest=$(grep "^DEST_HOST=" "$migrate_file" | cut -d'=' -f2- | sed 's/^"\(.*\)"$/\1/' | sed "s/^'\(.*\)'$/\1/")
-    
-    # 1. Меняем SOURCE_HOST = старый DEST_HOST
-    if [[ "$OLD_DEST_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        # Удаляем кавычки из значения, если есть, и заменяем
-        sed -i.bak "s|^SOURCE_HOST=.*|SOURCE_HOST=$OLD_DEST_HOST|" "$migrate_file"
-        echo -e "${SUCCESS_COLOR}✓ SOURCE_HOST обновлен: $old_source → $OLD_DEST_HOST${NC}"
-    else
-        echo -e "${ERROR_COLOR}Ошибка: некорректный OLD_DEST_HOST='$OLD_DEST_HOST'${NC}"
-        return 1
+    # Обновляем RU-сервер если восстанавливался
+    if [[ "$RESTORE_TARGET" == "ru" || "$RESTORE_TARGET" == "both" ]]; then
+        if [[ "$OLD_DEST_HOST_RU" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            sed -i "s|^SOURCE_HOST_RU=.*|SOURCE_HOST_RU=$OLD_DEST_HOST_RU|" "$migrate_file"
+            sed -i "s|^DEST_HOST_RU=.*|DEST_HOST_RU=|" "$migrate_file"
+            echo -e "${GREEN}✓ RU-сервер: SOURCE_HOST_RU ← $OLD_DEST_HOST_RU, DEST_HOST_RU очищен${NC}"
+        fi
     fi
     
-    # 2. Очищаем DEST_HOST (делаем пустым)
-    sed -i.bak "s|^DEST_HOST=.*|DEST_HOST=|" "$migrate_file"
-    echo -e "${SUCCESS_COLOR}✓ DEST_HOST очищен (готов к новой миграции)${NC}"
-    
-    # Удаляем временные .bak файлы от sed
-    rm -f "$migrate_file.bak"
-    
-    echo -e "${HEADER_COLOR}Новая конфигурация migrate.env:${NC}"
-    grep -E "^(SOURCE_HOST|DEST_HOST)=" "$migrate_file" | sed "s/^/  /"
+    echo -e "${CYAN}Текущая конфигурация:${NC}"
+    grep -E "^(SOURCE_HOST|DEST_HOST|SOURCE_HOST_RU|DEST_HOST_RU)=" "$migrate_file" | sed "s/^/  /"
 }
 
 main() {
+
+    [ $# -lt 1 ] && { echo -e "${RED}Использование: $0 <backup_path>${NC}"; exit 1; }
+    [ ! -d "$1" ] && { echo -e "${RED}Бэкап не найден: $1${NC}"; exit 1; }
+    
+    BACKUP_PATH="$1"
+    check_required_files
+    select_restore_target "$BACKUP_PATH"
+
+    # Сохраняем оригинальные значения ДО восстановления
+    OLD_SOURCE_HOST="$SOURCE_HOST"
+    OLD_DEST_HOST="$DEST_HOST"
+    OLD_SOURCE_HOST_RU="$SOURCE_HOST_RU"
+    OLD_DEST_HOST_RU="$DEST_HOST_RU"
+    
+    # Восстановление ru-сервера (antizapret, myshows_proxy)
+    if [[ "$RESTORE_TARGET" == "ru" || "$RESTORE_TARGET" == "both" ]]; then
+        [ -z "$DEST_HOST_RU" ] && { echo -e "${RED}Не задан DEST_HOST_RU в migrate.env${NC}"; exit 1; }
+        restore_antizapret_ru "$DEST_HOST_RU" "$BACKUP_PATH"
+        myshows_proxy_ru "$DEST_HOST_RU" "$BACKUP_PATH"
+        [ "$RESTORE_TARGET" == "ru" ] && exit 0  # если только ru — завершаем
+    fi
+
     echo -e "${BLUE}\n=== НАЧАЛО ВОССТАНОВЛЕНИЯ VPS ИЗ БЭКАПА ===${NC}"
     
     check_required_files
     check_arguments "$@"
-
-    # Сохраняем оригинальные значения ДО начала миграции
-    OLD_SOURCE_HOST="$SOURCE_HOST"
-    OLD_DEST_HOST="$DEST_HOST"
     
     # Проверка подключения к целевому серверу
     if ! safe_sshpass "root@$DEST_HOST" "echo 'Тестовое подключение'" "$DEST_ROOT_PASSWORD"; then
@@ -931,7 +1331,7 @@ main() {
         echo -e "\n${CYAN}=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ЗАПИСИ ===${NC}"
         echo -e "${YELLOW}Следующие домены нужно перенаправить на новый IP ($DEST_HOST):${NC}"
 
-        for domain in $DOMAINS_TO_UPDATE; do
+        for domain in $DOMAINS_TO_UPDATE_MAIN; do
             echo -e "  • ${GREEN}$domain${NC}"
             echo -e "  • ${GREEN}www.$domain${NC}"
         done
