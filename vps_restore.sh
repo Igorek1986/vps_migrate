@@ -178,6 +178,7 @@ select_arrow() {
             echo -e "    ${options[$i]}"
         fi
     done
+    echo -e "  ${YELLOW}[↑↓ навигация  Enter выбор  q выход]${NC}"
 
     while true; do
         IFS= read -rsn1 key 2>/dev/null
@@ -191,12 +192,18 @@ select_arrow() {
                 '[B')  # Вниз
                     selected=$(( (selected + 1) % count ))
                     ;;
+                '')    # Escape
+                    tput cnorm 2>/dev/null; trap - INT TERM
+                    SELECTED_INDEX=-1; SELECTED_VALUE=""; echo ""; return ;;
             esac
+        elif [[ "$key" == 'q' || "$key" == 'Q' ]]; then
+            tput cnorm 2>/dev/null; trap - INT TERM
+            SELECTED_INDEX=-1; SELECTED_VALUE=""; echo ""; return
         elif [[ "$key" == '' || "$key" == $'\n' || "$key" == $'\r' ]]; then
             break
         fi
 
-        # Перерисовка меню
+        # Перерисовка меню (подсказка остаётся внизу, не перерисовывается)
         tput cuu $count 2>/dev/null
         for ((i=0; i<count; i++)); do
             tput el 2>/dev/null
@@ -259,6 +266,8 @@ select_backup_interactive() {
 
     select_arrow "Выберите бэкап для восстановления:" "${options[@]}"
 
+    [ $SELECTED_INDEX -lt 0 ] && { echo -e "${YELLOW}Отменено${NC}"; exit 0; }
+
     BACKUP_PATH="${backup_dirs[$SELECTED_INDEX]}"
     echo -e "${GREEN}Выбран: $(basename "$BACKUP_PATH")${NC}"
 }
@@ -299,6 +308,8 @@ select_restore_target() {
     )
 
     select_arrow "Что восстанавливать?" "${options[@]}"
+
+    [ $SELECTED_INDEX -lt 0 ] && { echo -e "${YELLOW}Отменено${NC}"; exit 0; }
 
     case $SELECTED_INDEX in
         0) RESTORE_TARGET="main" ;;
