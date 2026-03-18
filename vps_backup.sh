@@ -238,6 +238,24 @@ cleanup_old_backups() {
         echo "Удаляем старый бэкап: $(basename "${backups[$i]}")"
         rm -rf "${backups[$i]}"
     done
+
+    # Логи ротируются вместе с бэкапами — оставляем столько же
+    local log_dir="$dir/logs"
+    [ ! -d "$log_dir" ] && return
+
+    local logs
+    if [[ "$(uname)" == "Darwin" ]]; then
+        mapfile -t logs < <(find "$log_dir" -maxdepth 1 -type f -name "backup_*.log" -exec stat -f "%m %N" {} \; 2>/dev/null | sort -rn | awk '{print $2}')
+    else
+        mapfile -t logs < <(find "$log_dir" -maxdepth 1 -type f -name "backup_*.log" -printf "%T@ %p\n" 2>/dev/null | sort -rn | awk '{print $2}')
+    fi
+
+    [ ${#logs[@]} -le $keep ] && return
+
+    for ((i=keep; i<${#logs[@]}; i++)); do
+        echo "Удаляем старый лог: $(basename "${logs[$i]}")"
+        rm -f "${logs[$i]}"
+    done
 }
 
 # === Список бэкапов ===
