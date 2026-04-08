@@ -80,14 +80,18 @@ backup_item() {
     TOTAL_ITEMS=$((TOTAL_ITEMS + 1))
     mkdir -p "$base_path$dst"
 
-    if rsync -aq --timeout=30 \
-        -e "ssh -i $SSH_KEY -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
-        "root@${source_host}:${src}" "$base_path$dst/" 2>/dev/null; then
-        echo -e "${SUCCESS_COLOR}✓ $name${NC}"
-    else
-        echo -e "${WARNING_COLOR}⚠ $src — не найден или ошибка копирования${NC}"
-        FAILED_ITEMS=$((FAILED_ITEMS + 1))
-    fi
+    local attempt
+    for attempt in 1 2 3; do
+        if rsync -aq --timeout=30 \
+            -e "ssh -i $SSH_KEY -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
+            "root@${source_host}:${src}" "$base_path$dst/" 2>/dev/null; then
+            [ $attempt -gt 1 ] && echo -e "${SUCCESS_COLOR}✓ $name (попытка $attempt)${NC}" || echo -e "${SUCCESS_COLOR}✓ $name${NC}"
+            return 0
+        fi
+        [ $attempt -lt 3 ] && sleep 5
+    done
+    echo -e "${WARNING_COLOR}⚠ $src — не найден или ошибка копирования${NC}"
+    FAILED_ITEMS=$((FAILED_ITEMS + 1))
 }
 
 # === Полный архив Lampac (однократно, хранится отдельно от ротируемых бэкапов) ===
@@ -176,6 +180,8 @@ backup_ru() {
     local backup_items_ru=(
         "/root/antizapret:/root/"
         "/root/myshows_proxy:/root/"
+        "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
+        "/etc/systemd/system/3proxy.service:/etc/systemd/system/"
     )
 
     for item in "${backup_items_ru[@]}"; do

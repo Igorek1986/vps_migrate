@@ -1109,25 +1109,29 @@ setup_movies_api() {
 }
 
 setup_3proxy() {
+    local dest_host="${1:-$DEST_HOST}"
+    local backup_dir="${2:-$BACKUP_PATH/main}"
+    local ssh_user="${3:-$NEW_USER}"
+
     echo "Устанавливаем 3proxy из бэкапа"
-    
+
     # Установка 3proxy
-    safe_ssh $NEW_USER@"$DEST_HOST" "git clone https://github.com/z3apa3a/3proxy || true"
-    safe_ssh $NEW_USER@"$DEST_HOST" "cd 3proxy && ln -s Makefile.Linux Makefile && make && sudo make install"
-    
+    safe_ssh $ssh_user@"$dest_host" "git clone https://github.com/z3apa3a/3proxy || true"
+    safe_ssh $ssh_user@"$dest_host" "cd 3proxy && ln -s Makefile.Linux Makefile && make && sudo make install"
+
     # Копируем конфиг из бэкапа
-    if [ -f "$BACKUP_PATH/main/etc/3proxy/3proxy.cfg" ]; then
+    if [ -f "$backup_dir/etc/3proxy/3proxy.cfg" ]; then
         echo "Копируем конфигурацию 3proxy..."
-        safe_ssh $NEW_USER@"$DEST_HOST" "sudo mkdir -p /etc/3proxy/"
+        safe_ssh $ssh_user@"$dest_host" "sudo mkdir -p /etc/3proxy/"
         rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/main/etc/3proxy/3proxy.cfg" \
-            root@"$DEST_HOST":/etc/3proxy/3proxy.cfg
+            "$backup_dir/etc/3proxy/3proxy.cfg" \
+            root@"$dest_host":/etc/3proxy/3proxy.cfg
     else
         echo -e "${YELLOW}Файл конфигурации 3proxy не найден в бэкапе${NC}"
     fi
-    
+
     # Запускаем службу
-    safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl start 3proxy.service && sudo systemctl enable 3proxy.service"
+    safe_ssh $ssh_user@"$dest_host" "sudo systemctl start 3proxy.service && sudo systemctl enable 3proxy.service"
 }
 
 setup_glances() {
@@ -1474,6 +1478,7 @@ main() {
         [ -z "${DEST_HOST_RU:-}" ] && { echo -e "${RED}Не задан DEST_HOST_RU в migrate.env${NC}"; exit 1; }
         restore_antizapret_ru "$DEST_HOST_RU" "$BACKUP_PATH"
         myshows_proxy_ru "$DEST_HOST_RU" "$BACKUP_PATH"
+        setup_3proxy "$DEST_HOST_RU" "$BACKUP_PATH/ru" "root"
         if [ "$RESTORE_TARGET" == "ru" ]; then
             print_summary
             exit 0
