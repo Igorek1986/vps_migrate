@@ -181,7 +181,6 @@ backup_ru() {
         "/root/antizapret:/root/"
         "/root/myshows_proxy:/root/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
-        "/etc/systemd/system/3proxy.service:/etc/systemd/system/"
     )
 
     for item in "${backup_items_ru[@]}"; do
