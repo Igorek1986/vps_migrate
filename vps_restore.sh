@@ -55,8 +55,9 @@ check_required_files() {
     
     # Обязательные переменные
     required_vars=(
-        "DEST_HOST" "DEST_ROOT_PASSWORD" 
-        "NEW_USER" "NEW_USER_PASSWORD" "DOMAINS_TO_UPDATE_MAIN" 
+        "DEST_HOST" "DEST_ROOT_PASSWORD"
+        "NEW_USER" "NEW_USER_PASSWORD"
+        "DOMAINS_TO_UPDATE_MAIN"
         "SWAP_SIZE"
         "BEGET_LOGIN" "BEGET_PASSWORD"
         "DEBUG"
@@ -67,7 +68,7 @@ check_required_files() {
         "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_NUMPARSER"
         "RUN_SETUP_MOVIES_API" "RUN_SETUP_3PROXY" "RUN_SETUP_GLANCES"
         "RUN_SETUP_SWAP"
-        "RUN_SETUP_FAIL2BAN"  # Добавлен флаг для fail2ban
+        "RUN_SETUP_FAIL2BAN"
         "RUN_UPDATE_DNS_RECORDS"
         "RUN_CLEANUP"
     )
@@ -169,26 +170,29 @@ select_arrow() {
 
     tput civis 2>/dev/null  # скрываем курсор
 
-    # Сохраняем позицию курсора перед первой опцией
-    tput sc 2>/dev/null
-
-    # Функция отрисовки опций (без подсказки — она статичная)
+    # Отрисовка всех строк меню (опции + подсказка)
+    # При повторном вызове сначала поднимаемся на (count+1) строк вверх
+    local _first_draw=1
     _draw_options() {
         local i
-        tput rc 2>/dev/null  # восстанавливаем позицию
+        if [ "$_first_draw" -eq 0 ]; then
+            # Поднимаемся на count строк опций + 1 строка подсказки
+            printf '\033[%dA' $(( count + 1 ))
+        fi
+        _first_draw=0
         for ((i=0; i<count; i++)); do
-            tput el 2>/dev/null
+            printf '\033[2K'  # очищаем строку целиком
             if [ $i -eq $selected ]; then
                 echo -e "  ${GREEN}▶ ${options[$i]}${NC}"
             else
                 echo -e "    ${options[$i]}"
             fi
         done
+        printf '\033[2K'
+        echo -e "  ${YELLOW}[↑↓ навигация  Enter выбор  q выход]${NC}"
     }
 
-    # Первоначальная отрисовка + статичная подсказка
     _draw_options
-    echo -e "  ${YELLOW}[↑↓ навигация  Enter выбор  q выход]${NC}"
 
     while true; do
         IFS= read -rsn1 key 2>/dev/null
@@ -1331,10 +1335,8 @@ update_dns_records() {
 
     echo -e "\n${BLUE}=== ОБНОВЛЕНИЕ DNS: $target_host ===${NC}"
 
-    # Кодируем логин и пароль для URL
-    local encoded_login
+    local encoded_login encoded_password
     encoded_login=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BEGET_LOGIN'))")
-    local encoded_password
     encoded_password=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$BEGET_PASSWORD'))")
 
     local all_success=true
@@ -1342,42 +1344,19 @@ update_dns_records() {
     for domain in $domains; do
         echo "Обновляем A-запись для $domain..."
 
-        # Формируем JSON и кодируем его
-        local json_data="{\"fqdn\":\"$domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$target_host\"}]}}"
-        local encoded_data
+        local json_data encoded_data response
+        json_data="{\"fqdn\":\"$domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$target_host\"}]}}"
         encoded_data=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$json_data")
+        response=$(curl -sg --globoff "https://api.beget.com/api/dns/changeRecords?login=$encoded_login&passwd=$encoded_password&input_format=json&output_format=json&input_data=$encoded_data")
 
-        # Выполняем запрос к API Beget
-        local response
-        response=$(curl -s "https://api.beget.com/api/dns/changeRecords?login=$encoded_login&passwd=$encoded_password&input_format=json&output_format=json&input_data=$encoded_data")
-
-        echo "Ответ API: $response"
-
-        # Проверяем успешность
-        if ! echo "$response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null; then
+        if echo "$response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✓${NC} $domain → $target_host"
+        else
             all_success=false
-            echo -e "${RED}Ошибка при обновлении DNS для $domain${NC}" >&2
-        fi
-
-        # Обновляем www-поддомен
-        local www_domain="www.$domain"
-        echo "Обновляем A-запись для $www_domain..."
-        local www_json_data="{\"fqdn\":\"$www_domain\",\"records\":{\"A\":[{\"priority\":10,\"value\":\"$target_host\"}]}}"
-        local www_encoded_data
-        www_encoded_data=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$www_json_data")
-
-        local www_response
-        www_response=$(curl -s "https://api.beget.com/api/dns/changeRecords?login=$encoded_login&passwd=$encoded_password&input_format=json&output_format=json&input_data=$www_encoded_data")
-
-        echo "Ответ API для www: $www_response"
-
-        if ! echo "$www_response" | jq -e '.status == "success" and .answer.status == "success"' >/dev/null; then
-            all_success=false
-            echo -e "${RED}Ошибка при обновлении DNS для $www_domain${NC}" >&2
+            echo -e "  ${RED}✗${NC} Ошибка обновления $domain: $response" >&2
         fi
     done
 
-    # Возвращаем статус через глобальную переменную
     DNS_UPDATED=$all_success
 }
 
@@ -1551,7 +1530,6 @@ main() {
         echo -e "\n${YELLOW}=== НЕ ЗАБУДЬТЕ ОБНОВИТЬ DNS ===${NC}"
         for domain in $DOMAINS_TO_UPDATE_MAIN; do
             echo -e "  • ${GREEN}$domain${NC} → $DEST_HOST"
-            echo -e "  • ${GREEN}www.$domain${NC} → $DEST_HOST"
         done
     fi
 }
