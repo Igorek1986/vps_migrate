@@ -466,39 +466,63 @@ restore_antizapret_ru() {
 install_openvpn_dco() {
     local host="$1"
     
-    echo "Устанавливаем OpenVPN DCO kernel module на $host..."
+    echo "Устанавливаем OpenVPN DCO kernel module (ovpn-dkms) на $host..."
     
     safe_ssh root@"$host" "
         export LC_ALL=C LANG=C
         
-        # Определяем версию Ubuntu
-        UBUNTU_VERSION=\$(lsb_release -rs 2>/dev/null || grep -oP 'VERSION_ID=\"\K[0-9.]+' /etc/os-release | head -1)
-        
-        if [[ \"\$UBUNTU_VERSION\" == \"24.04\" ]]; then
-            echo \"Ubuntu 24.04 — устанавливаем из репозитория...\"
-            apt update -qq
-            apt install -y openvpn-dco-dkms
-        elif [[ \"\$UBUNTU_VERSION\" == \"22.04\" || \"\$UBUNTU_VERSION\" == \"20.04\" ]]; then
-            echo \"Ubuntu \$UBUNTU_VERSION — устанавливаем из .deb...\"
-            apt update -qq
-            apt install -y dkms linux-headers-\$(uname -r) efivar
-            
-            # Скачиваем и устанавливаем пакет вручную
-            DEB_URL=\"http://archive.ubuntu.com/ubuntu/pool/universe/o/openvpn-dco-dkms/openvpn-dco-dkms_0.0+git20231103-1_all.deb\"
-            wget -q \"\$DEB_URL\" -O /tmp/openvpn-dco-dkms.deb && \
-            dpkg -i /tmp/openvpn-dco-dkms.deb || apt --fix-broken install -y
-        else
-            echo \"⚠ Неизвестная версия Ubuntu (\$UBUNTU_VERSION) — пропускаем установку DCO\"
-            exit 0
+        # 1. Удаляем старый пакет если есть (чтобы избежать конфликтов)
+        if dpkg -l | grep -q 'openvpn-dco-dkms'; then
+            echo '🔄 Удаляем старый пакет openvpn-dco-dkms...'
+            apt remove -y openvpn-dco-dkms 2>/dev/null || true
+            # Выгружаем старый модуль если загружен
+            modprobe -r openvpn-dco 2>/dev/null || true
+            modprobe -r ovpn-dco 2>/dev/null || true
         fi
         
-        # Проверяем установку
-        if modprobe openvpn-dco 2>/dev/null; then
-            echo '✓ OpenVPN DCO kernel module загружен'
-            lsmod | grep openvpn-dco
+        # 2. Определяем версию Ubuntu для codename репозитория
+        UBUNTU_VERSION=\$(lsb_release -rs 2>/dev/null || grep -oP 'VERSION_ID=\"\K[0-9.]+' /etc/os-release | head -1)
+        case \"\$UBUNTU_VERSION\" in
+            24.04) CODENAME='noble' ;;
+            22.04) CODENAME='jammy' ;;
+            20.04) CODENAME='focal' ;;
+            *) 
+                echo \"⚠ Неизвестная версия Ubuntu (\$UBUNTU_VERSION) — пропускаем установку DCO\"
+                exit 0
+                ;;
+        esac
+        
+        # 3. Добавляем официальный репозиторий OpenVPN 2.7 (если ещё не добавлен)
+        if [[ ! -f /etc/apt/sources.list.d/openvpn-aptrepo.list ]]; then
+            echo \"📦 Добавляем репозиторий OpenVPN 2.7...\"
+            mkdir -p /etc/apt/keyrings
+            curl -fsSL https://swupdate.openvpn.net/repos/repo-public.gpg | \\
+                gpg --dearmor --yes -o /etc/apt/keyrings/openvpn-repo-public.gpg
+            echo \"deb [arch=amd64 signed-by=/etc/apt/keyrings/openvpn-repo-public.gpg] \\
+                http://build.openvpn.net/debian/openvpn/release/2.7 \$CODENAME main\" | \\
+                tee /etc/apt/sources.list.d/openvpn-aptrepo.list > /dev/null
+            apt update -qq
+        fi
+        
+        # 4. Устанавливаем зависимости и новый пакет
+        echo \"Устанавливаем ovpn-dkms...\"
+        apt install -y dkms linux-headers-\$(uname -r) ovpn-dkms
+        
+        # 5. Загружаем новый модуль (имя изменилось: ovpn вместо openvpn-dco)
+        if modprobe ovpn 2>/dev/null; then
+            echo '✓ Модуль ovpn kernel module загружен'
+            lsmod | grep ^ovpn
         else
-            echo '⚠ Модуль не загружен (требуется перезагрузка для активации)'
+            echo '⚠ Модуль ovpn не загружен (требуется перезагрузка для активации)'
             echo '  Выполните после восстановления: sudo reboot'
+        fi
+        
+        # 6. Проверка: какой модуль доступен
+        echo '=== Проверка DCO ==='
+        if modinfo ovpn &>/dev/null; then
+            echo '✓ Модуль ovpn доступен в системе'
+        else
+            echo '⚠ Модуль ovpn не найден (возможно, нужна пересборка после обновления ядра)'
         fi
     "
 }
