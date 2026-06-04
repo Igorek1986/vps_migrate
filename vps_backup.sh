@@ -180,6 +180,8 @@ backup_ru() {
     local backup_items_ru=(
         "/root/antizapret:/root/"
         "/root/myshows_proxy:/root/"
+        "/root/az-world.sh:/root/"
+        "/root/.ssh/id_ed25519:/root/.ssh/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
     )
 

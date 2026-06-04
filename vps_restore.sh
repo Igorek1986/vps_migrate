@@ -462,6 +462,39 @@ restore_antizapret_ru() {
         update_migrate_env_after_restore
     fi
     
+    # Восстанавливаем az-world.sh
+    if [ -f "$backup_path/ru/root/az-world.sh" ]; then
+        echo "Копируем /root/az-world.sh..."
+        rsync -aq -e "ssh -i $SSH_KEY" "$backup_path/ru/root/az-world.sh" root@"$dest_host":/root/az-world.sh
+        safe_ssh root@"$dest_host" "chmod +x /root/az-world.sh"
+        echo -e "${GREEN}✓ /root/az-world.sh восстановлен${NC}"
+    else
+        echo -e "${YELLOW}⚠ az-world.sh не найден в бэкапе, пропускаем${NC}"
+    fi
+
+    # Восстанавливаем SSH-ключ manager→worker и прописываем его на worker
+    if [ -f "$backup_path/ru/root/.ssh/id_ed25519" ]; then
+        echo "Восстанавливаем SSH-ключ manager→worker..."
+        safe_ssh root@"$dest_host" "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
+        rsync -aq -e "ssh -i $SSH_KEY" "$backup_path/ru/root/.ssh/id_ed25519" root@"$dest_host":/root/.ssh/id_ed25519
+        safe_ssh root@"$dest_host" "chmod 600 /root/.ssh/id_ed25519"
+
+        PUB_KEY=$(safe_ssh root@"$dest_host" "ssh-keygen -y -f /root/.ssh/id_ed25519 2>/dev/null")
+        if [ -n "$PUB_KEY" ] && [ -n "$target_host" ]; then
+            safe_ssh root@"$target_host" "
+                mkdir -p ~/.ssh && chmod 700 ~/.ssh
+                grep -qF '$PUB_KEY' ~/.ssh/authorized_keys 2>/dev/null || echo '$PUB_KEY' >> ~/.ssh/authorized_keys
+                chmod 600 ~/.ssh/authorized_keys
+            "
+            safe_ssh root@"$dest_host" "ssh -o StrictHostKeyChecking=accept-new root@$target_host echo ok 2>/dev/null"
+            echo -e "${GREEN}✓ SSH-ключ manager→worker установлен${NC}"
+        else
+            echo -e "${YELLOW}⚠ Не удалось настроить SSH-ключ между нодами${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ SSH-ключ не найден в бэкапе, пропускаем${NC}"
+    fi
+
     echo -e "${GREEN}✓ Antizapret восстановлен на $dest_host${NC}"
     echo -e "${CYAN}Статус сервисов:${NC}"
     safe_ssh root@"$dest_host" "docker service ls --filter name=antizapret"
