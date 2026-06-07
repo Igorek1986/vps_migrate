@@ -121,6 +121,36 @@ backup_lampac_archive() {
     fi
 }
 
+# === Бэкап movies-go (дамп БД через админский API-ключ + .env и plugins по rsync) ===
+backup_movies_go() {
+    local backup_path="$1"
+
+    # 1. Полный дамп БД через API-ключ (вся БД: пользователи, токены, настройки, карточки)
+    if [ -n "${MOVIES_GO_DOMAIN:-}" ] && [ -n "${MOVIES_GO_API_KEY:-}" ]; then
+        TOTAL_ITEMS=$((TOTAL_ITEMS + 1))
+        mkdir -p "$backup_path/main/movies-go"
+        echo "Скачиваем дамп БД movies-go через API ($MOVIES_GO_DOMAIN)..."
+        if curl -fsS --max-time 600 -H "X-API-Key: ${MOVIES_GO_API_KEY}" \
+            "https://${MOVIES_GO_DOMAIN}/api/admin/backup" \
+            -o "$backup_path/main/movies-go/movies-go-db.sql.gz"; then
+            local size
+            size=$(du -sh "$backup_path/main/movies-go/movies-go-db.sql.gz" 2>/dev/null | cut -f1)
+            echo -e "${SUCCESS_COLOR}✓ movies-go-db.sql.gz ($size)${NC}"
+        else
+            rm -f "$backup_path/main/movies-go/movies-go-db.sql.gz"
+            echo -e "${WARNING_COLOR}⚠ Не удалось скачать дамп movies-go через API${NC}"
+            FAILED_ITEMS=$((FAILED_ITEMS + 1))
+        fi
+    else
+        echo -e "${WARNING_COLOR}MOVIES_GO_DOMAIN/MOVIES_GO_API_KEY не заданы — дамп БД movies-go пропущен${NC}"
+    fi
+
+    # 2. .env и plugins/ — файлы на хосте, не в БД (как у других сервисов)
+    local mg_path="/home/$NEW_USER/movies-go"
+    backup_item "$mg_path/.env:/movies-go/" "$SOURCE_HOST" "$backup_path/main"
+    backup_item "$mg_path/plugins:/movies-go/" "$SOURCE_HOST" "$backup_path/main"
+}
+
 # === Бэкап основного сервера ===
 backup_main() {
     local backup_path="$1"
@@ -134,7 +164,6 @@ backup_main() {
         "/etc/nginx/nginx.conf:/etc/nginx/"
         "/etc/letsencrypt:/etc/"
         "/root/antizapret:/root/"
-        "/home/$NEW_USER/NUMParser/db/numparser.db:/home/$NEW_USER/NUMParser/db/"
         "/home/lampac/module/manifest.json:/home/lampac/module/"
         "/home/lampac/init.conf:/home/lampac/"
         "/home/lampac/users.json:/home/lampac/"
@@ -145,11 +174,8 @@ backup_main() {
         "/home/lampac/database/:/home/lampac/database/"
         "/home/lampac/passwd:/home/lampac/"
         "/home/lampac/module/TimecodeUser/:/home/lampac/module/TimecodeUser/"
-        "/home/$NEW_USER/movies-api:/home/$NEW_USER/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
         "/etc/systemd/system/lampac.service:/etc/systemd/system/"
-        "/etc/systemd/system/numparser.service:/etc/systemd/system/"
-        "/etc/systemd/system/movies-api.service:/etc/systemd/system/"
         "/etc/systemd/system/glances.service:/etc/systemd/system/"
         "/home/$NEW_USER/.zshrc:/home/$NEW_USER/"
         "/home/$NEW_USER/.zprofile:/home/$NEW_USER/"
@@ -208,6 +234,7 @@ create_backup() {
         echo -e "${HEADER_COLOR}--- Основной сервер ($SOURCE_HOST) ---${NC}"
         backup_main "$backup_path"
         backup_lampac_archive
+        backup_movies_go "$backup_path"
     else
         echo -e "${WARNING_COLOR}SOURCE_HOST не задан — пропускаем${NC}"
     fi

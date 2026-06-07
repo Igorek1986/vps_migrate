@@ -43,8 +43,6 @@ check_required_files() {
     [ ! -f "migrate.env" ] && missing_files+=("migrate.env")
     [ ! -f "id_ed25519" ] && missing_files+=("id_ed25519")
     [ ! -f "id_ed25519.pub" ] && missing_files+=("id_ed25519.pub")
-    [ ! -f "movies-api.env" ] && missing_files+=("movies-api.env")
-    [ ! -f "numparser_config.yml" ] && missing_files+=("numparser_config.yml")
     
     if [ ${#missing_files[@]} -ne 0 ]; then
         echo -e "${RED}Отсутствуют необходимые файлы: ${missing_files[*]}${NC}"
@@ -65,8 +63,8 @@ check_required_files() {
         "RUN_SETUP_SSH_KEYS" "RUN_CREATE_USER" "RUN_INSTALL_BASE_PACKAGES"
         "RUN_SETUP_OH_MY_ZSH" "RUN_INSTALL_PYENV" "RUN_INSTALL_POETRY"
         "RUN_INSTALL_LAMPAC" "RUN_TRANSFER_NGINX_CERTS" "RUN_SETUP_MARZBAN"
-        "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_NUMPARSER"
-        "RUN_SETUP_MOVIES_API" "RUN_SETUP_3PROXY" "RUN_SETUP_GLANCES"
+        "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_MOVIES_GO"
+        "RUN_SETUP_3PROXY" "RUN_SETUP_GLANCES"
         "RUN_SETUP_SWAP"
         "RUN_SETUP_FAIL2BAN"
         "RUN_UPDATE_DNS_RECORDS"
@@ -1074,85 +1072,51 @@ go version || { echo "ОШИБКА: Go не работает!"; exit 1; }
 EOF
 }
 
-setup_numparser() {
-    echo "Настраиваем NUMParser из бэкапа"
-    
-    # Клонируем репозиторий (если еще не существует)
-    safe_ssh $NEW_USER@"$DEST_HOST" "git clone https://github.com/Igorek1986/NUMParser.git || true"
-    
-    # Копируем конфиг
-    scp -i "$SSH_KEY" numparser_config.yml $NEW_USER@"$DEST_HOST":/home/$NEW_USER/NUMParser/config.yml
-    
-    # Копируем базу данных из бэкапа
-    if [ -f "$BACKUP_PATH/main/home/$NEW_USER/NUMParser/db/numparser.db" ]; then
-        echo "Копируем базу данных numparser.db..."
-        safe_ssh $NEW_USER@"$DEST_HOST" "mkdir -p /home/$NEW_USER/NUMParser/db"
-        rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/main/home/$NEW_USER/NUMParser/db/numparser.db" \
-            $NEW_USER@"$DEST_HOST":/home/$NEW_USER/NUMParser/db/
+setup_movies_go() {
+    echo "Настраиваем movies-go из бэкапа"
+
+    local mg_path="/home/$NEW_USER/movies-go"
+    local mg_backup="$BACKUP_PATH/main/movies-go"
+    local repo="https://github.com/Igorek1986/movies-go.git"
+
+    # Docker нужен — movies-go запускается через docker compose
+    install_docker_if_needed "$DEST_HOST" "$NEW_USER"
+
+    # Репозиторий
+    safe_ssh "$NEW_USER@$DEST_HOST" "git clone $repo $mg_path 2>/dev/null || (cd $mg_path && git pull --ff-only || true)"
+
+    # .env из бэкапа (содержит TMDB_TOKEN, SUPERUSER и пр.)
+    if [ -f "$mg_backup/.env" ]; then
+        echo "Копируем .env из бэкапа..."
+        scp -i "$SSH_KEY" "$mg_backup/.env" "$NEW_USER@$DEST_HOST:$mg_path/.env"
     else
-        echo -e "${YELLOW}Файл базы данных numparser.db не найден в бэкапе${NC}"
+        echo -e "${YELLOW}.env movies-go не найден в бэкапе — заполни вручную перед запуском${NC}"
     fi
-    
-    # Пересобираем и настраиваем службу
-    safe_ssh $NEW_USER@"$DEST_HOST" "
-        cd NUMParser
-        export PATH=\"\$PATH:/usr/local/go/bin\"
-        go build -o NUMParser_deb ./cmd || {
-            echo 'ОШИБКА: Не удалось собрать NUMParser'
-            exit 1
-        }
-    "
 
+    # plugins/ из бэкапа (first-party и кастомные плагины)
+    if [ -d "$mg_backup/plugins" ]; then
+        echo "Копируем plugins/..."
+        safe_ssh "$NEW_USER@$DEST_HOST" "mkdir -p $mg_path/plugins"
+        rsync -az -e "ssh -i $SSH_KEY" "$mg_backup/plugins/" "$NEW_USER@$DEST_HOST:$mg_path/plugins/"
+    fi
 
-    if [ -f "$BACKUP_PATH/main/etc/systemd/system/numparser.service" ]; then
-        echo "Копируем numparser.service..."
-        rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/main/etc/systemd/system/numparser.service" \
-            root@"$DEST_HOST":/etc/systemd/system/
-        safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start numparser && sudo systemctl enable numparser"
+    # Восстановление БД из дампа (полный pg_dump — схема + данные)
+    if [ -f "$mg_backup/movies-go-db.sql.gz" ]; then
+        echo "Копируем дамп БД на сервер..."
+        scp -i "$SSH_KEY" "$mg_backup/movies-go-db.sql.gz" "$NEW_USER@$DEST_HOST:$mg_path/movies-go-db.sql.gz"
+        echo "Поднимаем БД и восстанавливаем дамп..."
+        # Юзера/базу берём из переменных самого контейнера Postgres (POSTGRES_USER/DB),
+        # чтобы не зависеть от формата .env.
+        safe_ssh "$NEW_USER@$DEST_HOST" "cd $mg_path
+sudo docker compose up -d db
+for i in \$(seq 1 30); do sudo docker compose exec -T db sh -c 'pg_isready -U \"\$POSTGRES_USER\" -q' 2>/dev/null && break; sleep 2; done
+gunzip -c movies-go-db.sql.gz | sudo docker compose exec -T db sh -c 'psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -q'
+sudo docker compose up -d --build app
+rm -f movies-go-db.sql.gz"
     else
-        echo -e "${YELLOW}Файл numparser.service не найден в бэкапе${NC}"
+        echo -e "${YELLOW}Дамп movies-go-db.sql.gz не найден — поднимаем с пустой БД${NC}"
+        safe_ssh "$NEW_USER@$DEST_HOST" "cd $mg_path && sudo docker compose up -d --build"
     fi
-     
-}
-
-setup_movies_api() {
-    echo "Настраиваем Movies-api из бэкапа"
-    
-    safe_ssh $NEW_USER@"$DEST_HOST" "git clone https://github.com/Igorek1986/movies-api.git || true"
-    
-    # Копируем .env файл
-    scp -i "$SSH_KEY" movies-api.env $NEW_USER@"$DEST_HOST":/home/$NEW_USER/movies-api/.env
-    
-    # Копируем базу данных из бэкапа (если есть)
-    if [ -f "$BACKUP_PATH/main/home/$NEW_USER/movies-api/db.sqlite3" ]; then
-        echo "Копируем базу данных movies-api..."
-        rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/main/home/$NEW_USER/movies-api/db.sqlite3" \
-            $NEW_USER@"$DEST_HOST":/home/$NEW_USER/movies-api/
-    fi
-    
-    echo "Устанавливаем зависимости..."
-    safe_ssh "$NEW_USER@$DEST_HOST" "
-        cd movies-api
-        export PATH=\"/home/$NEW_USER/.local/bin:\$PATH\"
-        /home/$NEW_USER/.local/bin/poetry install --no-root || {
-            echo -e '${RED}Ошибка установки зависимостей!${NC}'
-            exit 1
-        }
-    "
-
-    if [ -f "$BACKUP_PATH/main/etc/systemd/system/movies-api.service" ]; then
-        echo "Копируем movies-api.service..."
-        rsync -avz -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/main/etc/systemd/system/movies-api.service" \
-            root@"$DEST_HOST":/etc/systemd/system/
-        safe_ssh $NEW_USER@"$DEST_HOST" "sudo systemctl daemon-reload && sudo systemctl start movies-api && sudo systemctl enable movies-api"
-    else
-        echo -e "${YELLOW}Файл movies-api.service не найден в бэкапе${NC}"
-    fi
-        
 }
 
 setup_3proxy() {
@@ -1527,8 +1491,7 @@ main() {
     run_if_enabled "setup_fail2ban"
     run_if_enabled "install_go"
     run_if_enabled "setup_antizapret"
-    run_if_enabled "setup_numparser"
-    run_if_enabled "setup_movies_api"
+    run_if_enabled "setup_movies_go"
     run_if_enabled "setup_3proxy"
     run_if_enabled "setup_glances"
 

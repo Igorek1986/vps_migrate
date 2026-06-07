@@ -8,8 +8,6 @@
 - `vps_restore.sh` — интерактивное восстановление данных на новом сервере из бэкапа
 - `vps_migrate.sh` — автоматизация полного процесса миграции (устаревший, не поддерживается)
 - `migrate.env_template` — шаблон файла с переменными окружения
-- `movies-api.env_tempalte` — шаблон переменных окружения для сервиса movies-api
-- `numparser_config_tempalte.yml` — шаблон конфига для NUMParser
 - `backups/` — папка для хранения резервных копий (создаётся автоматически)
 - `backups/logs/` — логи каждого запуска бэкапа (создаётся автоматически)
 - `id_ed25519` — приватный SSH-ключ для доступа к серверам (добавляется вручную)
@@ -29,15 +27,7 @@ cd vps_migrate
 
 ```bash
 cp migrate.env_template migrate.env
-nano migrate.env
-```
-```bash
-cp movies-api.env_tempalte movies-api.env
-nano movies-api.env
-```
-```bash
-cp numparser_config_tempalte.yml numparser_config.yml
-nano numparser_config.yml
+nano migrate.env   # в т.ч. MOVIES_GO_DOMAIN и MOVIES_GO_API_KEY для бэкапа БД movies-go
 ```
 
 ### 3. Добавьте приватный SSH-ключ
@@ -126,8 +116,7 @@ crontab -e
 | [Antizapret](https://github.com/xtrime-ru/antizapret-vpn-docker) — VPN с обходом блокировок (Docker Swarm) | main + RU |
 | [Marzban](https://github.com/Gozargah/Marzban) — панель управления VPN | main |
 | [Lampac](https://github.com/immisterio/Lampac) — медиа-агрегатор | main |
-| [NUMParser](https://github.com/Igorek1986/NUMParser) — парсер rutor + сопоставление с TMDB | main |
-| [Movies API](https://github.com/Igorek1986/movies-api) — JSON API поверх NUMParser | main |
+| [movies-go](https://github.com/Igorek1986/movies-go) — Go-бэкенд (парсер + API + кабинет) на PostgreSQL в Docker, заменил связку NUMParser + Movies API | main |
 | [3proxy](https://github.com/3proxy/3proxy) — лёгкий прокси-сервер | main |
 | [Glances](https://github.com/nicolargo/glances) — мониторинг сервера | main |
 | [Fail2ban](https://github.com/fail2ban/fail2ban) — защита от брутфорса | main |
@@ -162,6 +151,10 @@ DOMAINS_TO_UPDATE_RU="example.ru"
 DOCKER_USER=your_login
 DOCKER_PASSWORD=your_personal_access_token
 
+# movies-go (бэкап БД через админский API-ключ)
+MOVIES_GO_DOMAIN="example.ru"        # домен movies-go на исходном сервере
+MOVIES_GO_API_KEY=""                 # Админка → Бэкап и восстановление → API-ключ
+
 # Telegram-уведомления
 TELEGRAM_BOT_TOKEN=""
 TELEGRAM_CHAT_ID=""
@@ -180,20 +173,9 @@ RUN_INSTALL_BASE_PACKAGES="False"
 # ... и т.д.
 ```
 
-### movies-api.env
+### movies-go
 
-```env
-TMDB_TOKEN='Bearer TOKEN'
-RELEASES_DIR=releases
-DEBUG=False
-CACHE_CLEAR_PASSWORD=PASSWORD
-```
-
-### numparser_config.yml
-
-```yaml
-tmdbtoken: 'Bearer TOKEN'
-```
+Отдельный конфиг не нужен: при бэкапе `.env` забирается с исходного сервера, при восстановлении — кладётся обратно. Дамп БД (пользователи, токены, настройки, карточки) скачивается по API-ключу и грузится в Postgres-контейнер на целевом сервере.
 
 ---
 
