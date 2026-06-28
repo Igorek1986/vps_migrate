@@ -736,8 +736,8 @@ install_base_packages() {
     # ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo usermod -aG docker $NEW_USER"
     install_docker_if_needed "$DEST_HOST" "$NEW_USER"
 
-    # Установка certbot
-    ssh -i "$SSH_KEY" $NEW_USER@"$DEST_HOST" "sudo snap install --classic certbot"
+    # certbot больше не используется: TLS — wildcard через acme.sh на главном nginx,
+    # сюда сертификаты прилетают в /etc/nginx/ssl (раскладка deploy-certs.sh / restore).
 }
 
 install_docker_if_needed() {
@@ -1042,18 +1042,25 @@ transfer_nginx_certs() {
         echo -e "${YELLOW}Директория sites-enabled не найдена в бэкапе${NC}"
     fi
     
-    # Сертификаты Let's Encrypt
-    echo "Копируем сертификаты Let's Encrypt..."
-    if [ -d "$BACKUP_PATH/main/etc/letsencrypt" ]; then
-        safe_ssh root@"$DEST_HOST" "mkdir -p /etc/letsencrypt"
-        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/letsencrypt/" root@"$DEST_HOST":/etc/letsencrypt/
+    # Wildcard-сертификаты (acme.sh на главном nginx раскладывает их в /etc/nginx/ssl).
+    # На этом сервере acme.sh нет — просто восстанавливаем файлы, чтобы nginx стартовал.
+    echo "Копируем сертификаты (/etc/nginx/ssl)..."
+    if [ -d "$BACKUP_PATH/main/etc/nginx/ssl" ]; then
+        safe_ssh root@"$DEST_HOST" "mkdir -p /etc/nginx/ssl"
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/nginx/ssl/" root@"$DEST_HOST":/etc/nginx/ssl/
     else
-        echo -e "${YELLOW}Директория letsencrypt не найдена в бэкапе${NC}"
+        echo -e "${YELLOW}Директория /etc/nginx/ssl не найдена в бэкапе${NC}"
     fi
-    
+
+    # systemd-override nginx (авто-рестарт + ожидание сети, чтобы nginx не падал при загрузке)
+    if [ -d "$BACKUP_PATH/main/etc/systemd/system/nginx.service.d" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/systemd/system/nginx.service.d/" root@"$DEST_HOST":/etc/systemd/system/nginx.service.d/
+        safe_ssh root@"$DEST_HOST" "systemctl daemon-reload"
+    fi
+
     # Перезагружаем Nginx
     echo "Перезагружаем Nginx..."
-    safe_ssh root@"$DEST_HOST" "systemctl restart nginx"
+    safe_ssh root@"$DEST_HOST" "nginx -t && systemctl restart nginx"
 }
 
 install_go() {
@@ -1247,6 +1254,32 @@ setup_marzban() {
 
     echo "=== Восстановление Marzban успешно завершено ==="
     echo "Панель доступна по адресу: https://$DEST_HOST:${PANEL_PORT:-8000}"
+}
+
+# Восстановление 3x-ui (панель Xray в Docker)
+setup_3xui() {
+    echo "=== Процесс восстановления 3x-ui из бэкапа ==="
+
+    local src="$BACKUP_PATH/main/home/$NEW_USER/docker/3x-ui"
+    if [ ! -d "$src" ]; then
+        echo -e "${YELLOW}Директория 3x-ui не найдена в бэкапе — пропускаем${NC}"
+        return 0
+    fi
+
+    # 1. Возвращаем папку целиком: docker-compose.yml + db (x-ui.db со всем стейтом) + cert.
+    #    Через root, чтобы сохранить владельца БД (контейнер пишет от root).
+    safe_ssh root@"$DEST_HOST" "mkdir -p /home/$NEW_USER/docker/3x-ui"
+    rsync -avz -e "ssh -i $SSH_KEY" \
+        "$src/" \
+        root@"$DEST_HOST":/home/"$NEW_USER"/docker/3x-ui/ || {
+            echo -e "${RED}Ошибка копирования данных 3x-ui${NC}" >&2
+            return 1
+        }
+
+    # 2. Поднимаем контейнер (порт/путь/логин/инбаунды/хосты уже внутри x-ui.db)
+    safe_ssh root@"$DEST_HOST" "cd /home/$NEW_USER/docker/3x-ui && docker compose up -d"
+
+    echo "=== Восстановление 3x-ui успешно завершено ==="
 }
 
 # Восстановление конфигурации fail2ban
@@ -1488,6 +1521,7 @@ main() {
     run_if_enabled "install_lampac"
     run_if_enabled "transfer_nginx_certs"
     run_if_enabled "setup_marzban"
+    run_if_enabled "setup_3xui"
     run_if_enabled "setup_fail2ban"
     run_if_enabled "install_go"
     run_if_enabled "setup_antizapret"

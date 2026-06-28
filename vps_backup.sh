@@ -159,10 +159,12 @@ backup_main() {
     local backup_items=(
         "/var/lib/marzban:/var/lib/"
         "/opt/marzban/.env:/opt/marzban/"
+        "/home/$NEW_USER/docker/3x-ui:/home/$NEW_USER/docker/"
         "/etc/nginx/sites-available:/etc/nginx/"
         "/etc/nginx/sites-enabled:/etc/nginx/"
         "/etc/nginx/nginx.conf:/etc/nginx/"
-        "/etc/letsencrypt:/etc/"
+        "/etc/nginx/ssl:/etc/nginx/"
+        "/etc/systemd/system/nginx.service.d:/etc/systemd/system/"
         "/root/antizapret:/root/"
         "/home/lampac/module/manifest.json:/home/lampac/module/"
         "/home/lampac/init.conf:/home/lampac/"
