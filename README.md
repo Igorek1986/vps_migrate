@@ -115,6 +115,7 @@ crontab -e
 |--------|--------|
 | [Antizapret](https://github.com/xtrime-ru/antizapret-vpn-docker) — VPN с обходом блокировок (Docker Swarm) | main + RU |
 | [Marzban](https://github.com/Gozargah/Marzban) — панель управления VPN | main |
+| [3x-ui](https://github.com/MHSanaei/3x-ui) — панель Xray (VLESS-Reality + Hysteria2) в Docker; wildcard-серт авто-синхронизируется в маунт через `systemd.path` (для TLS Hysteria) | main |
 | [Lampac](https://github.com/immisterio/Lampac) — медиа-агрегатор | main |
 | [movies-go](https://github.com/Igorek1986/movies-go) — Go-бэкенд (парсер + API + кабинет) на PostgreSQL в Docker, заменил связку NUMParser + Movies API | main |
 | [3proxy](https://github.com/3proxy/3proxy) — лёгкий прокси-сервер | main |

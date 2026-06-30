@@ -1289,6 +1289,30 @@ setup_3xui() {
     # 2. Поднимаем контейнер (порт/путь/логин/инбаунды/хосты уже внутри x-ui.db)
     safe_ssh root@"$DEST_HOST" "cd /home/$NEW_USER/docker/3x-ui && docker compose up -d"
 
+    # 3. Авто-синхронизация wildcard-серта в маунт 3x-ui (нужен для TLS Hysteria).
+    #    systemd.path следит за /etc/nginx/ssl/<домен>/fullchain.pem и при продлении
+    #    копирует серт в маунт + перезапускает контейнер. acme.sh тут нет — серт сюда
+    #    кладёт transfer_nginx_certs (запускается раньше), а юнит держит маунт актуальным.
+    if [ -f "$BACKUP_PATH/main/usr/local/bin/sync-3xui-cert.sh" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$BACKUP_PATH/main/usr/local/bin/sync-3xui-cert.sh" \
+            root@"$DEST_HOST":/usr/local/bin/
+        # путь маунта мог измениться вместе с NEW_USER
+        safe_ssh root@"$DEST_HOST" "sed -i 's#/home/[^/]*/docker/3x-ui#/home/$NEW_USER/docker/3x-ui#g' /usr/local/bin/sync-3xui-cert.sh && chmod +x /usr/local/bin/sync-3xui-cert.sh"
+
+        if [ -f "$BACKUP_PATH/main/etc/systemd/system/3xui-cert.path" ]; then
+            rsync -avz -e "ssh -i $SSH_KEY" \
+                "$BACKUP_PATH/main/etc/systemd/system/3xui-cert.path" \
+                "$BACKUP_PATH/main/etc/systemd/system/3xui-cert.service" \
+                root@"$DEST_HOST":/etc/systemd/system/
+            safe_ssh root@"$DEST_HOST" "systemctl daemon-reload && systemctl enable --now 3xui-cert.path"
+        fi
+        # первичная синхронизация: подложить актуальный серт из /etc/nginx/ssl в маунт
+        safe_ssh root@"$DEST_HOST" "/usr/local/bin/sync-3xui-cert.sh || true"
+    else
+        echo -e "${YELLOW}sync-3xui-cert.sh не найден в бэкапе — авто-продление серта 3x-ui пропущено${NC}"
+    fi
+
     echo "=== Восстановление 3x-ui успешно завершено ==="
 }
 
