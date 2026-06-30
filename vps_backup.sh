@@ -163,6 +163,7 @@ backup_main() {
         "/etc/nginx/sites-available:/etc/nginx/"
         "/etc/nginx/sites-enabled:/etc/nginx/"
         "/etc/nginx/nginx.conf:/etc/nginx/"
+        "/etc/nginx/stream.conf:/etc/nginx/"
         "/etc/nginx/ssl:/etc/nginx/"
         "/etc/systemd/system/nginx.service.d:/etc/systemd/system/"
         "/root/antizapret:/root/"

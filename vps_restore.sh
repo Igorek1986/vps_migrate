@@ -1027,7 +1027,17 @@ transfer_nginx_certs() {
     else
         echo -e "${YELLOW}Файл nginx.conf не найден в бэкапе${NC}"
     fi
-    
+
+    # stream-модуль + stream.conf (SNI-роутер на 443).
+    # nginx.conf включает stream.conf, поэтому без модуля nginx -t упадёт.
+    echo "Устанавливаем libnginx-mod-stream..."
+    safe_ssh root@"$DEST_HOST" "DEBIAN_FRONTEND=noninteractive apt-get install -y libnginx-mod-stream"
+    if [ -f "$BACKUP_PATH/main/etc/nginx/stream.conf" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/nginx/stream.conf" root@"$DEST_HOST":/etc/nginx/
+        # listen в stream.conf привязан к публичному IP — перенацеливаем на новый сервер
+        safe_ssh root@"$DEST_HOST" "sed -i -E 's/listen[[:space:]]+[0-9.]+:443;/listen $DEST_HOST:443;/' /etc/nginx/stream.conf"
+    fi
+
     # sites-available
     if [ -d "$BACKUP_PATH/main/etc/nginx/sites-available" ]; then
         rsync -avz -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/etc/nginx/sites-available/" root@"$DEST_HOST":/etc/nginx/sites-available/
