@@ -215,6 +215,12 @@ backup_ru() {
         "/root/az-world.sh:/root/"
         "/root/.ssh/id_ed25519:/root/.ssh/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
+        # AmneziaWG->home-LAN access (host-level, outside the antizapret stack)
+        "/etc/wireguard/wg-home.conf:/etc/wireguard/"
+        "/usr/local/bin/az-lan-firewall.sh:/usr/local/bin/"
+        "/etc/systemd/system/az-lan-firewall.service:/etc/systemd/system/"
+        "/etc/systemd/system/az-lan-firewall.timer:/etc/systemd/system/"
+        "/etc/systemd/system/wg-quick@wg-home.service.d:/etc/systemd/system/"
     )
 
     for item in "${backup_items_ru[@]}"; do

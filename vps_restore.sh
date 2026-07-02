@@ -493,6 +493,33 @@ restore_antizapret_ru() {
         echo -e "${YELLOW}⚠ SSH-ключ не найден в бэкапе, пропускаем${NC}"
     fi
 
+    # Восстанавливаем доступ AmneziaWG->домашний LAN (host-level, вне стека antizapret)
+    # wg-home туннель до домашнего MikroTik + правило ".200+" (инжектор в контейнер amnezia)
+    if [ -f "$backup_path/ru/etc/wireguard/wg-home.conf" ]; then
+        echo "Восстанавливаем wg-home + az-lan-firewall (доступ в домашний LAN)..."
+        safe_ssh root@"$dest_host" "DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools >/dev/null 2>&1 || true; mkdir -p /etc/systemd/system/wg-quick@wg-home.service.d"
+        rsync -aq -e "ssh -i $SSH_KEY" "$backup_path/ru/etc/wireguard/wg-home.conf" root@"$dest_host":/etc/wireguard/wg-home.conf
+        rsync -aq -e "ssh -i $SSH_KEY" "$backup_path/ru/usr/local/bin/az-lan-firewall.sh" root@"$dest_host":/usr/local/bin/az-lan-firewall.sh
+        rsync -aq -e "ssh -i $SSH_KEY" \
+            "$backup_path/ru/etc/systemd/system/az-lan-firewall.service" \
+            "$backup_path/ru/etc/systemd/system/az-lan-firewall.timer" \
+            root@"$dest_host":/etc/systemd/system/
+        rsync -aq -e "ssh -i $SSH_KEY" "$backup_path/ru/etc/systemd/system/wg-quick@wg-home.service.d/" \
+            root@"$dest_host":/etc/systemd/system/wg-quick@wg-home.service.d/
+        safe_ssh root@"$dest_host" "
+            chmod 600 /etc/wireguard/wg-home.conf
+            chmod +x /usr/local/bin/az-lan-firewall.sh
+            systemctl daemon-reload
+            systemctl enable --now wg-quick@wg-home
+            systemctl enable --now az-lan-firewall.timer
+        "
+        echo -e "${GREEN}✓ wg-home + az-lan-firewall восстановлены${NC}"
+        echo -e "${YELLOW}ℹ WG-пир на домашнем MikroTik должен указывать на FQDN (vps_ru.igorek1986.ru:51822),${NC}"
+        echo -e "${YELLOW}  тогда при смене IP VPS он подхватится через DNS автоматически (эта запись должна быть в DOMAINS_TO_UPDATE_RU).${NC}"
+    else
+        echo -e "${YELLOW}⚠ wg-home.conf не найден в бэкапе — доступ в домашний LAN пропущен${NC}"
+    fi
+
     echo -e "${GREEN}✓ Antizapret восстановлен на $dest_host${NC}"
     echo -e "${CYAN}Статус сервисов:${NC}"
     safe_ssh root@"$dest_host" "docker service ls --filter name=antizapret"
