@@ -116,7 +116,10 @@ crontab -e
 | [Antizapret](https://github.com/xtrime-ru/antizapret-vpn-docker) — VPN с обходом блокировок (Docker Swarm) | main + RU |
 | [Marzban](https://github.com/Gozargah/Marzban) — панель управления VPN | main |
 | [3x-ui](https://github.com/MHSanaei/3x-ui) — панель Xray (VLESS-Reality + Hysteria2) в Docker; wildcard-серт авто-синхронизируется в маунт через `systemd.path` (для TLS Hysteria) | main |
-| [Lampac](https://github.com/immisterio/Lampac) — медиа-агрегатор | main |
+| [lampac-nextgen](https://github.com/lampac-nextgen/lampac) — медиа-агрегатор в Docker; в бэкапе только `lampac-docker/{config,mods,plugins,database}` + `docker-compose.yaml`, при восстановлении код клонируется заново | main |
+| [torrserver](https://github.com/YouROK/TorrServer) — локальный торрент-стример в Docker, используется как источник PidTor у lampac-nextgen | main |
+| [jackett](https://github.com/Jackett/Jackett) — торрент-индексер в Docker | main |
+| [watchtower](https://github.com/nickfedor/watchtower) — автообновление помеченных Docker-контейнеров (label-подход, `com.centurylinklabs.watchtower.enable=true`) | main |
 | [movies-go](https://github.com/Igorek1986/movies-go) — Go-бэкенд (парсер + API + кабинет) на PostgreSQL в Docker, заменил связку NUMParser + Movies API | main |
 | [3proxy](https://github.com/3proxy/3proxy) — лёгкий прокси-сервер | main |
 | [Glances](https://github.com/nicolargo/glances) — мониторинг сервера | main |

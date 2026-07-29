@@ -63,8 +63,9 @@ check_required_files() {
         "RUN_SETUP_SSH_KEYS" "RUN_CREATE_USER" "RUN_INSTALL_BASE_PACKAGES"
         "RUN_SETUP_OH_MY_ZSH" "RUN_INSTALL_PYENV" "RUN_INSTALL_POETRY"
         "RUN_INSTALL_LAMPAC" "RUN_TRANSFER_NGINX_CERTS" "RUN_SETUP_MARZBAN"
-        "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_MOVIES_GO"
+        "RUN_SETUP_3XUI" "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_MOVIES_GO"
         "RUN_SETUP_3PROXY" "RUN_SETUP_GLANCES"
+        "RUN_SETUP_TORRSERVER" "RUN_SETUP_WATCHTOWER" "RUN_SETUP_JACKETT"
         "RUN_SETUP_SWAP"
         "RUN_SETUP_FAIL2BAN"
         "RUN_UPDATE_DNS_RECORDS"
@@ -904,67 +905,93 @@ EOF
     echo "Poetry успешно установлен и настроен"
 }
 
+# Восстановление lampac-nextgen (Docker, github.com/lampac-nextgen/lampac)
+# В бэкапе лежит только lampac-docker/{config,mods,plugins,database} + docker-compose.yaml —
+# сам код тянется свежим git clone, cache/ не бэкапится (регенерируется).
 install_lampac() {
-    local archive="$SCRIPT_DIR/backups/lampac_full.tar.gz"
+    local src="$BACKUP_PATH/main/home/$NEW_USER/docker/lampac-nextgen"
+    if [ ! -d "$src" ]; then
+        echo -e "${YELLOW}Директория lampac-nextgen не найдена в бэкапе — пропускаем${NC}"
+        return 0
+    fi
 
-    if [ ! -f "$archive" ]; then
-        echo -e "${RED}Архив lampac_full.tar.gz не найден: $archive${NC}"
-        echo -e "${YELLOW}Запустите бэкап чтобы создать архив, затем повторите восстановление${NC}"
+    echo "Клонируем lampac-nextgen на $DEST_HOST..."
+    safe_ssh root@"$DEST_HOST" "mkdir -p /home/$NEW_USER/docker && \
+        rm -rf /home/$NEW_USER/docker/lampac-nextgen && \
+        git clone https://github.com/lampac-nextgen/lampac.git /home/$NEW_USER/docker/lampac-nextgen && \
+        mkdir -p /home/$NEW_USER/docker/lampac-nextgen/lampac-docker/cache \
+                 /home/$NEW_USER/docker/lampac-nextgen/lampac-docker/database"
+
+    echo "Накатываем config/mods/plugins/database/docker-compose.yaml из бэкапа..."
+    rsync -aq -e "ssh -i $SSH_KEY" "$src/" root@"$DEST_HOST":/home/"$NEW_USER"/docker/lampac-nextgen/ || {
+        echo -e "${RED}Ошибка копирования данных lampac-nextgen${NC}" >&2
         return 1
+    }
+
+    safe_ssh root@"$DEST_HOST" "chown -R $NEW_USER:$NEW_USER /home/$NEW_USER/docker/lampac-nextgen"
+    safe_ssh root@"$DEST_HOST" "cd /home/$NEW_USER/docker/lampac-nextgen && docker compose up -d"
+
+    echo -e "${GREEN}✓ lampac-nextgen восстановлен${NC}"
+}
+
+# Восстановление torrserver (Docker, ghcr.io/yourok/torrserver)
+setup_torrserver() {
+    local src="$BACKUP_PATH/main/home/$NEW_USER/docker/torrserver"
+    if [ ! -d "$src" ]; then
+        echo -e "${YELLOW}Директория torrserver не найдена в бэкапе — пропускаем${NC}"
+        return 0
     fi
 
-    local size
-    size=$(du -sh "$archive" 2>/dev/null | cut -f1)
-    echo "Архив: $archive ($size)"
+    safe_ssh root@"$DEST_HOST" "mkdir -p /home/$NEW_USER/docker/torrserver"
+    rsync -aq -e "ssh -i $SSH_KEY" "$src/" root@"$DEST_HOST":/home/"$NEW_USER"/docker/torrserver/ || {
+        echo -e "${RED}Ошибка копирования данных torrserver${NC}" >&2
+        return 1
+    }
 
-    # Устанавливаем dotnet 9 runtime если не установлен
-    safe_ssh root@"$DEST_HOST" "
-        if ! /usr/bin/dotnet --info 2>/dev/null | grep -q 'Version:'; then
-            echo 'Устанавливаем dotnet 9 runtime...'
-            curl -sSL https://dot.net/v1/dotnet-install.sh | \
-                bash -s -- --runtime aspnetcore --version 9.0.12 --install-dir /usr/share/dotnet
-            ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet 2>/dev/null || true
-        else
-            echo 'dotnet уже установлен'
-        fi
-    "
+    safe_ssh root@"$DEST_HOST" "chown -R $NEW_USER:$NEW_USER /home/$NEW_USER/docker/torrserver"
+    safe_ssh root@"$DEST_HOST" "cd /home/$NEW_USER/docker/torrserver && docker compose up -d"
 
-    # Создаём директорию и распаковываем архив прямо из потока (без temp-файла)
-    echo "Распаковываем архив на $DEST_HOST..."
-    safe_ssh root@"$DEST_HOST" "mkdir -p /home/lampac"
-    cat "$archive" | ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new \
-        root@"$DEST_HOST" "tar xzf - -C /home/lampac"
+    echo -e "${GREEN}✓ torrserver восстановлен (логин/пароль — как в CONFIG/accs.db из бэкапа)${NC}"
+}
 
-    # Восстанавливаем службу
-    if [ -f "$BACKUP_PATH/main/etc/systemd/system/lampac.service" ]; then
-        rsync -aq -e "ssh -i $SSH_KEY" \
-            "$BACKUP_PATH/main/etc/systemd/system/lampac.service" \
-            root@"$DEST_HOST":/etc/systemd/system/
-    else
-        echo -e "${YELLOW}lampac.service не найден в бэкапе — создаём${NC}"
-        ssh -i "$SSH_KEY" root@"$DEST_HOST" "cat > /etc/systemd/system/lampac.service << 'EOF'
-[Unit]
-Description=Lampac
-Wants=network.target
-After=network.target
-[Service]
-WorkingDirectory=/home/lampac
-ExecStart=/usr/bin/dotnet Lampac.dll
-Restart=always
-LimitNOFILE=32000
-[Install]
-WantedBy=multi-user.target
-EOF"
+# Восстановление watchtower (Docker, nickfedor/watchtower) — автообновление помеченных контейнеров
+setup_watchtower() {
+    local src="$BACKUP_PATH/main/home/$NEW_USER/docker/watchtower"
+    if [ ! -d "$src" ]; then
+        echo -e "${YELLOW}Директория watchtower не найдена в бэкапе — пропускаем${NC}"
+        return 0
     fi
 
-    # Накатываем актуальные пользовательские файлы поверх архива
-    if [ -d "$BACKUP_PATH/main/home/lampac" ]; then
-        echo "Накатываем актуальные файлы из бэкапа..."
-        rsync -aq -e "ssh -i $SSH_KEY" "$BACKUP_PATH/main/home/lampac/" root@"$DEST_HOST":/home/lampac/
+    safe_ssh root@"$DEST_HOST" "mkdir -p /home/$NEW_USER/docker/watchtower"
+    rsync -aq -e "ssh -i $SSH_KEY" "$src/" root@"$DEST_HOST":/home/"$NEW_USER"/docker/watchtower/ || {
+        echo -e "${RED}Ошибка копирования данных watchtower${NC}" >&2
+        return 1
+    }
+
+    safe_ssh root@"$DEST_HOST" "chown -R $NEW_USER:$NEW_USER /home/$NEW_USER/docker/watchtower"
+    safe_ssh root@"$DEST_HOST" "cd /home/$NEW_USER/docker/watchtower && docker compose up -d"
+
+    echo -e "${GREEN}✓ watchtower восстановлен${NC}"
+}
+
+# Восстановление jackett (Docker, lscr.io/linuxserver/jackett)
+setup_jackett() {
+    local src="$BACKUP_PATH/main/home/$NEW_USER/docker/jackett"
+    if [ ! -d "$src" ]; then
+        echo -e "${YELLOW}Директория jackett не найдена в бэкапе — пропускаем${NC}"
+        return 0
     fi
 
-    safe_ssh root@"$DEST_HOST" "systemctl daemon-reload"
-    echo -e "${GREEN}✓ Lampac восстановлен (disabled/stopped — запустите вручную когда готово)${NC}"
+    safe_ssh root@"$DEST_HOST" "mkdir -p /home/$NEW_USER/docker/jackett"
+    rsync -aq -e "ssh -i $SSH_KEY" "$src/" root@"$DEST_HOST":/home/"$NEW_USER"/docker/jackett/ || {
+        echo -e "${RED}Ошибка копирования данных jackett${NC}" >&2
+        return 1
+    }
+
+    safe_ssh root@"$DEST_HOST" "chown -R $NEW_USER:$NEW_USER /home/$NEW_USER/docker/jackett"
+    safe_ssh root@"$DEST_HOST" "cd /home/$NEW_USER/docker/jackett && docker compose up -d"
+
+    echo -e "${GREEN}✓ jackett восстановлен${NC}"
 }
 
 setup_antizapret() {
@@ -1583,6 +1610,9 @@ main() {
     run_if_enabled "transfer_nginx_certs"
     run_if_enabled "setup_marzban"
     run_if_enabled "setup_3xui"
+    run_if_enabled "setup_torrserver"
+    run_if_enabled "setup_watchtower"
+    run_if_enabled "setup_jackett"
     run_if_enabled "setup_fail2ban"
     run_if_enabled "install_go"
     run_if_enabled "setup_antizapret"

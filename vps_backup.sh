@@ -94,33 +94,6 @@ backup_item() {
     FAILED_ITEMS=$((FAILED_ITEMS + 1))
 }
 
-# === Полный архив Lampac (однократно, хранится отдельно от ротируемых бэкапов) ===
-backup_lampac_archive() {
-    local archive="$SCRIPT_DIR/backups/lampac_full.tar.gz"
-
-    if [ -f "$archive" ]; then
-        local size
-        size=$(du -sh "$archive" 2>/dev/null | cut -f1)
-        echo -e "${SUCCESS_COLOR}✓ lampac_full.tar.gz уже есть ($size) — пропускаем${NC}"
-        return 0
-    fi
-
-    echo "Создаём полный архив /home/lampac (первый раз, может занять несколько минут)..."
-
-    if ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-        root@"$SOURCE_HOST" \
-        "tar czf - -C /home/lampac ." \
-        > "$archive" 2>/dev/null; then
-        local size
-        size=$(du -sh "$archive" 2>/dev/null | cut -f1)
-        echo -e "${SUCCESS_COLOR}✓ lampac_full.tar.gz создан ($size)${NC}"
-    else
-        rm -f "$archive"
-        echo -e "${WARNING_COLOR}⚠ Не удалось создать архив Lampac${NC}"
-        FAILED_ITEMS=$((FAILED_ITEMS + 1))
-    fi
-}
-
 # === Бэкап movies-go (дамп БД через админский API-ключ + .env и plugins по rsync) ===
 backup_movies_go() {
     local backup_path="$1"
@@ -170,18 +143,15 @@ backup_main() {
         "/etc/nginx/ssl:/etc/nginx/"
         "/etc/systemd/system/nginx.service.d:/etc/systemd/system/"
         "/root/antizapret:/root/"
-        "/home/lampac/module/manifest.json:/home/lampac/module/"
-        "/home/lampac/init.conf:/home/lampac/"
-        "/home/lampac/users.json:/home/lampac/"
-        "/home/lampac/wwwroot/profileIcons:/home/lampac/wwwroot/"
-        "/home/lampac/plugins/lampainit-invc.my.js:/home/lampac/plugins/"
-        "/home/lampac/plugins/privateinit.my.js:/home/lampac/plugins/"
-        "/home/lampac/wwwroot/my_plugins:/home/lampac/wwwroot/"
-        "/home/lampac/database/:/home/lampac/database/"
-        "/home/lampac/passwd:/home/lampac/"
-        "/home/lampac/module/TimecodeUser/:/home/lampac/module/TimecodeUser/"
+        "/home/$NEW_USER/docker/lampac-nextgen/lampac-docker/config:/home/$NEW_USER/docker/lampac-nextgen/lampac-docker/"
+        "/home/$NEW_USER/docker/lampac-nextgen/lampac-docker/mods:/home/$NEW_USER/docker/lampac-nextgen/lampac-docker/"
+        "/home/$NEW_USER/docker/lampac-nextgen/lampac-docker/plugins:/home/$NEW_USER/docker/lampac-nextgen/lampac-docker/"
+        "/home/$NEW_USER/docker/lampac-nextgen/lampac-docker/database:/home/$NEW_USER/docker/lampac-nextgen/lampac-docker/"
+        "/home/$NEW_USER/docker/lampac-nextgen/docker-compose.yaml:/home/$NEW_USER/docker/lampac-nextgen/"
+        "/home/$NEW_USER/docker/torrserver:/home/$NEW_USER/docker/"
+        "/home/$NEW_USER/docker/watchtower:/home/$NEW_USER/docker/"
+        "/home/$NEW_USER/docker/jackett:/home/$NEW_USER/docker/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
-        "/etc/systemd/system/lampac.service:/etc/systemd/system/"
         "/etc/systemd/system/glances.service:/etc/systemd/system/"
         "/home/$NEW_USER/.zshrc:/home/$NEW_USER/"
         "/home/$NEW_USER/.zprofile:/home/$NEW_USER/"
@@ -245,7 +215,6 @@ create_backup() {
     if [ -n "${SOURCE_HOST:-}" ]; then
         echo -e "${HEADER_COLOR}--- Основной сервер ($SOURCE_HOST) ---${NC}"
         backup_main "$backup_path"
-        backup_lampac_archive
         backup_movies_go "$backup_path"
     else
         echo -e "${WARNING_COLOR}SOURCE_HOST не задан — пропускаем${NC}"
@@ -303,11 +272,11 @@ cleanup_old_backups() {
     local dir="$1"
     [ ! -d "$dir" ] && return
 
-    local backups
+    local backups=()
     if [[ "$(uname)" == "Darwin" ]]; then
-        mapfile -t backups < <(find "$dir" -maxdepth 1 -type d -name "backup_*" -exec stat -f "%m %N" {} \; 2>/dev/null | sort -rn | awk '{print $2}')
+        while IFS= read -r line; do backups+=("$line"); done < <(find "$dir" -maxdepth 1 -type d -name "backup_*" -exec stat -f "%m %N" {} \; 2>/dev/null | sort -rn | awk '{print $2}')
     else
-        mapfile -t backups < <(find "$dir" -maxdepth 1 -type d -name "backup_*" -printf "%T@ %p\n" 2>/dev/null | sort -rn | awk '{print $2}')
+        while IFS= read -r line; do backups+=("$line"); done < <(find "$dir" -maxdepth 1 -type d -name "backup_*" -printf "%T@ %p\n" 2>/dev/null | sort -rn | awk '{print $2}')
     fi
 
     local keep=3
@@ -322,11 +291,11 @@ cleanup_old_backups() {
     local log_dir="$dir/logs"
     [ ! -d "$log_dir" ] && return
 
-    local logs
+    local logs=()
     if [[ "$(uname)" == "Darwin" ]]; then
-        mapfile -t logs < <(find "$log_dir" -maxdepth 1 -type f -name "backup_*.log" -exec stat -f "%m %N" {} \; 2>/dev/null | sort -rn | awk '{print $2}')
+        while IFS= read -r line; do logs+=("$line"); done < <(find "$log_dir" -maxdepth 1 -type f -name "backup_*.log" -exec stat -f "%m %N" {} \; 2>/dev/null | sort -rn | awk '{print $2}')
     else
-        mapfile -t logs < <(find "$log_dir" -maxdepth 1 -type f -name "backup_*.log" -printf "%T@ %p\n" 2>/dev/null | sort -rn | awk '{print $2}')
+        while IFS= read -r line; do logs+=("$line"); done < <(find "$log_dir" -maxdepth 1 -type f -name "backup_*.log" -printf "%T@ %p\n" 2>/dev/null | sort -rn | awk '{print $2}')
     fi
 
     [ ${#logs[@]} -le $keep ] && return
