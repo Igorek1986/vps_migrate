@@ -66,6 +66,7 @@ check_required_files() {
         "RUN_SETUP_3XUI" "RUN_INSTALL_GO" "RUN_SETUP_ANTIZAPRET" "RUN_SETUP_MOVIES_GO"
         "RUN_SETUP_3PROXY" "RUN_SETUP_GLANCES"
         "RUN_SETUP_TORRSERVER" "RUN_SETUP_WATCHTOWER" "RUN_SETUP_JACKETT"
+        "RUN_SETUP_CLOUDFLARED"
         "RUN_SETUP_SWAP"
         "RUN_SETUP_FAIL2BAN"
         "RUN_UPDATE_DNS_RECORDS"
@@ -991,7 +992,59 @@ setup_jackett() {
     safe_ssh root@"$DEST_HOST" "chown -R $NEW_USER:$NEW_USER /home/$NEW_USER/docker/jackett"
     safe_ssh root@"$DEST_HOST" "cd /home/$NEW_USER/docker/jackett && docker compose up -d"
 
+    # Прогрев Jackett: первый запрос после простоя контейнера может занимать
+    # 100+ сек (холодный сетевой коннект), и Jackett-парсер в Lampa не успевает
+    # дождаться ответа. Дёргаем аггрегатный поиск раз в 5 минут через cron.
+    local apikey
+    apikey=$(safe_ssh root@"$DEST_HOST" "grep -o '\"APIKey\":\"[^\"]*\"' /home/$NEW_USER/docker/jackett/config/Jackett/ServerConfig.json | cut -d'\"' -f4")
+    if [ -n "$apikey" ]; then
+        safe_ssh root@"$DEST_HOST" "(crontab -l 2>/dev/null | grep -vF 'indexers/all/results'; echo '*/5 * * * * curl -s -o /dev/null -m 30 \"http://127.0.0.1:9117/api/v2.0/indexers/all/results?apikey=${apikey}&Query=keepalive\" >/dev/null 2>&1') | crontab -"
+        echo -e "${GREEN}✓ jackett keepalive cron добавлен${NC}"
+    else
+        echo -e "${YELLOW}Не удалось получить APIKey Jackett — cron прогрева не добавлен${NC}"
+    fi
+
     echo -e "${GREEN}✓ jackett восстановлен${NC}"
+}
+
+# Восстановление cloudflared (Cloudflare Tunnel для l/j/ts/np.flowbyte.cc — обходит IP VPS целиком)
+setup_cloudflared() {
+    local creds_src="$BACKUP_PATH/main/home/$NEW_USER/.cloudflared"
+    local config_src="$BACKUP_PATH/main/etc/cloudflared/config.yml"
+
+    if [ ! -d "$creds_src" ] || [ ! -f "$config_src" ]; then
+        echo -e "${YELLOW}Данные cloudflared не найдены в бэкапе — пропускаем${NC}"
+        return 0
+    fi
+
+    echo "Устанавливаем cloudflared..."
+    safe_ssh root@"$DEST_HOST" "
+        mkdir -p --mode=0755 /usr/share/keyrings
+        curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+        echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
+        apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflared -qq
+    "
+
+    echo "Копируем креды и конфиг туннеля из бэкапа..."
+    safe_ssh root@"$DEST_HOST" "mkdir -p /home/$NEW_USER/.cloudflared /etc/cloudflared"
+    rsync -aq -e "ssh -i $SSH_KEY" "$creds_src/" root@"$DEST_HOST":/home/"$NEW_USER"/.cloudflared/ || {
+        echo -e "${RED}Ошибка копирования ~/.cloudflared${NC}" >&2
+        return 1
+    }
+    rsync -aq -e "ssh -i $SSH_KEY" "$config_src" root@"$DEST_HOST":/etc/cloudflared/config.yml || {
+        echo -e "${RED}Ошибка копирования /etc/cloudflared/config.yml${NC}" >&2
+        return 1
+    }
+
+    safe_ssh root@"$DEST_HOST" "
+        chown -R $NEW_USER:$NEW_USER /home/$NEW_USER/.cloudflared
+        cloudflared service install
+        systemctl daemon-reload
+        systemctl enable --now cloudflared
+    "
+
+    echo -e "${GREEN}✓ cloudflared восстановлен (l/j/ts/np.flowbyte.cc — DNS менять не нужно, туннель привязан к ID, не к IP)${NC}"
 }
 
 setup_antizapret() {
@@ -1613,6 +1666,7 @@ main() {
     run_if_enabled "setup_torrserver"
     run_if_enabled "setup_watchtower"
     run_if_enabled "setup_jackett"
+    run_if_enabled "setup_cloudflared"
     run_if_enabled "setup_fail2ban"
     run_if_enabled "install_go"
     run_if_enabled "setup_antizapret"

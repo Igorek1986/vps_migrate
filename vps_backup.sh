@@ -151,6 +151,8 @@ backup_main() {
         "/home/$NEW_USER/docker/torrserver:/home/$NEW_USER/docker/"
         "/home/$NEW_USER/docker/watchtower:/home/$NEW_USER/docker/"
         "/home/$NEW_USER/docker/jackett:/home/$NEW_USER/docker/"
+        "/etc/cloudflared/config.yml:/etc/cloudflared/"
+        "/home/$NEW_USER/.cloudflared:/home/$NEW_USER/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
         "/etc/systemd/system/glances.service:/etc/systemd/system/"
         "/home/$NEW_USER/.zshrc:/home/$NEW_USER/"
