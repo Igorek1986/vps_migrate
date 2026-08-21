@@ -85,6 +85,11 @@ sudo apt-get install -y sshpass
 
 По завершении выводится итоговая таблица (✓ / ✗ / —) по каждому шагу.
 
+После восстановления каждого сервера автоматически выполняется проверка здоровья
+(`check_health`, не отключается флагом): load average, свободная память, заполненность
+диска, unhealthy/restarting контейнеры; на `ru` дополнительно — реплики сервисов стека
+antizapret. Результат тоже попадает в итоговую таблицу (`check_health` / `check_health_ru`).
+
 **Неинтерактивный режим** (для скриптов):
 ```bash
 ./vps_restore.sh ./backups/backup_YYYYMMDD_HHMMSS --target main
@@ -124,6 +129,7 @@ crontab -e
 | [3proxy](https://github.com/3proxy/3proxy) — лёгкий прокси-сервер | main |
 | [Glances](https://github.com/nicolargo/glances) — мониторинг сервера | main |
 | [Fail2ban](https://github.com/fail2ban/fail2ban) — защита от брутфорса | main |
+| vps-health-monitor.sh — свой health-check (load/CPU/IO/контейнеры раз в минуту, без бэкапа лога) | main + RU |
 | myshows_proxy — прокси для MyShows | RU |
 
 ---

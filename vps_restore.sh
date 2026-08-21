@@ -146,6 +146,73 @@ safe_sshpass() {
 }
 
 # =============================================
+# Проверка здоровья сервера после восстановления
+# (load, память, диск, контейнеры; для ru — ещё и реплики сервисов antizapret)
+# =============================================
+check_health() {
+    local host="$1"
+    local label="$2"
+    local user="${3:-root}"
+    local problems=0
+
+    echo -e "${CYAN}--- Проверка здоровья: $label ($host) ---${NC}"
+
+    local report
+    report=$(ssh -i "$SSH_KEY" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$user@$host" '
+        echo "load=$(cut -d" " -f1-3 /proc/loadavg)"
+        echo "mem_avail_mb=$(free -m | awk "/^Mem:/ {print \$7}")"
+        echo "disk_use_pct=$(df / | awk "NR==2 {print \$5}" | tr -d %)"
+        echo "containers_total=$(docker ps -q | wc -l)"
+        echo "containers_unhealthy=$(docker ps --filter health=unhealthy -q | wc -l)"
+        echo "containers_restarting=$(docker ps --filter status=restarting -q | wc -l)"
+    ' 2>/dev/null)
+
+    if [ -z "$report" ]; then
+        echo -e "${RED}✗ Нет связи с $host по SSH — здоровье не проверено${NC}"
+        return 1
+    fi
+    echo "$report" | sed 's/^/  /'
+
+    local unhealthy restarting disk_use
+    unhealthy=$(echo "$report" | awk -F= '/^containers_unhealthy/{print $2}')
+    restarting=$(echo "$report" | awk -F= '/^containers_restarting/{print $2}')
+    disk_use=$(echo "$report" | awk -F= '/^disk_use_pct/{print $2}')
+
+    if [ "${unhealthy:-0}" -gt 0 ]; then
+        echo -e "${RED}  ✗ unhealthy контейнеров: $unhealthy${NC}"
+        problems=1
+    fi
+    if [ "${restarting:-0}" -gt 0 ]; then
+        echo -e "${RED}  ✗ контейнеров в restarting: $restarting${NC}"
+        problems=1
+    fi
+    if [ "${disk_use:-0}" -ge 90 ]; then
+        echo -e "${YELLOW}  ⚠ диск заполнен на ${disk_use}%${NC}"
+        problems=1
+    fi
+
+    # На ru-сервере (swarm-манагер) дополнительно проверяем реплики стека antizapret
+    if [ "$label" = "ru" ]; then
+        local bad_services
+        bad_services=$(ssh -i "$SSH_KEY" -o ConnectTimeout=10 "$user@$host" \
+            "docker service ls --filter name=antizapret --format '{{.Name}} {{.Replicas}}'" 2>/dev/null \
+            | awk '{split($2,r,"/"); if (r[1]+0==0) print}')
+        if [ -n "$bad_services" ]; then
+            echo -e "${RED}  ✗ Сервисы antizapret с 0 активных реплик:${NC}"
+            echo "$bad_services" | sed 's/^/    /'
+            problems=1
+        fi
+    fi
+
+    if [ "$problems" -eq 0 ]; then
+        echo -e "${GREEN}✓ $label ($host): здоров${NC}"
+    else
+        echo -e "${RED}✗ $label ($host): обнаружены проблемы (см. выше)${NC}"
+    fi
+    return $problems
+}
+
+# =============================================
 # Меню с навигацией стрелками
 # Результат: SELECTED_INDEX (номер), SELECTED_VALUE (текст)
 # =============================================
@@ -522,9 +589,28 @@ restore_antizapret_ru() {
         echo -e "${YELLOW}⚠ wg-home.conf не найден в бэкапе — доступ в домашний LAN пропущен${NC}"
     fi
 
+    # Восстанавливаем скрипт мониторинга здоровья VPS (крон раз в минуту; лог не бэкапится)
+    if [ -f "$backup_path/ru/usr/local/bin/vps-health-monitor.sh" ]; then
+        echo "Восстанавливаем vps-health-monitor.sh..."
+        rsync -aq -e "ssh -i $SSH_KEY" \
+            "$backup_path/ru/usr/local/bin/vps-health-monitor.sh" root@"$dest_host":/usr/local/bin/vps-health-monitor.sh
+        rsync -aq -e "ssh -i $SSH_KEY" \
+            "$backup_path/ru/etc/cron.d/vps-health" root@"$dest_host":/etc/cron.d/vps-health
+        safe_ssh root@"$dest_host" "chmod +x /usr/local/bin/vps-health-monitor.sh && chmod 644 /etc/cron.d/vps-health"
+        echo -e "${GREEN}✓ vps-health-monitor.sh восстановлен${NC}"
+    else
+        echo -e "${YELLOW}⚠ vps-health-monitor.sh не найден в бэкапе, пропускаем${NC}"
+    fi
+
     echo -e "${GREEN}✓ Antizapret восстановлен на $dest_host${NC}"
     echo -e "${CYAN}Статус сервисов:${NC}"
     safe_ssh root@"$dest_host" "docker service ls --filter name=antizapret"
+
+    if check_health "$dest_host" "ru" "root"; then
+        log_step "check_health_ru" "ok"
+    else
+        log_step "check_health_ru" "error"
+    fi
 }
 
 install_openvpn_dco() {
@@ -1285,6 +1371,25 @@ setup_glances() {
     fi
 }
 
+# === Восстановление скрипта мониторинга здоровья VPS (крон раз в минуту; лог не бэкапится) ===
+setup_vps_health_monitor() {
+    echo "Восстанавливаем vps-health-monitor.sh на $DEST_HOST..."
+
+    local src="$BACKUP_PATH/main/home/$NEW_USER/vps-health-monitor.sh"
+    if [ ! -f "$src" ]; then
+        echo -e "${YELLOW}vps-health-monitor.sh не найден в бэкапе — пропускаем${NC}"
+        return 0
+    fi
+
+    rsync -aq -e "ssh -i $SSH_KEY" "$src" root@"$DEST_HOST":/home/"$NEW_USER"/vps-health-monitor.sh
+    safe_ssh root@"$DEST_HOST" "
+        chmod +x /home/$NEW_USER/vps-health-monitor.sh
+        chown $NEW_USER:$NEW_USER /home/$NEW_USER/vps-health-monitor.sh
+        (crontab -u $NEW_USER -l 2>/dev/null | grep -v vps-health-monitor.sh; echo '* * * * * /home/$NEW_USER/vps-health-monitor.sh') | crontab -u $NEW_USER -
+    "
+    echo -e "${GREEN}✓ vps-health-monitor.sh восстановлен и добавлен в crontab $NEW_USER${NC}"
+}
+
 setup_marzban() {
     echo "=== Процесс восстановления Marzban из бэкапа ==="
 
@@ -1673,6 +1778,7 @@ main() {
     run_if_enabled "setup_movies_go"
     run_if_enabled "setup_3proxy"
     run_if_enabled "setup_glances"
+    run_if_enabled "setup_vps_health_monitor"
 
     if [ "$DEBUG" = "False" ]; then
         run_if_enabled "update_dns_records"
@@ -1680,6 +1786,13 @@ main() {
     fi
 
     run_if_enabled "cleanup"
+
+    # Проверка здоровья сервера после восстановления (не гейтится RUN_-флагом — выполняется всегда)
+    if check_health "$DEST_HOST" "main" "root"; then
+        log_step "check_health" "ok"
+    else
+        log_step "check_health" "error"
+    fi
 
     print_summary
 

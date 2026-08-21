@@ -155,6 +155,7 @@ backup_main() {
         "/home/$NEW_USER/.cloudflared:/home/$NEW_USER/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
         "/etc/systemd/system/glances.service:/etc/systemd/system/"
+        "/home/$NEW_USER/vps-health-monitor.sh:/home/$NEW_USER/"
         "/home/$NEW_USER/.zshrc:/home/$NEW_USER/"
         "/home/$NEW_USER/.zprofile:/home/$NEW_USER/"
         "/etc/fail2ban/jail.local:/etc/fail2ban/"
@@ -193,6 +194,9 @@ backup_ru() {
         "/etc/systemd/system/az-lan-firewall.service:/etc/systemd/system/"
         "/etc/systemd/system/az-lan-firewall.timer:/etc/systemd/system/"
         "/etc/systemd/system/wg-quick@wg-home.service.d:/etc/systemd/system/"
+        # Мониторинг здоровья VPS (крон раз в минуту; лог /var/log/vps-health.log сознательно не бэкапится)
+        "/usr/local/bin/vps-health-monitor.sh:/usr/local/bin/"
+        "/etc/cron.d/vps-health:/etc/cron.d/"
     )
 
     for item in "${backup_items_ru[@]}"; do
