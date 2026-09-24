@@ -155,6 +155,10 @@ backup_main() {
         "/home/$NEW_USER/.cloudflared:/home/$NEW_USER/"
         "/etc/3proxy/3proxy.cfg:/etc/3proxy/"
         "/etc/systemd/system/glances.service:/etc/systemd/system/"
+        # Хост-файрвол публичного интерфейса (закрывает всё кроме 22/80/443 и swarm с MSK)
+        "/usr/local/sbin/vps-fw.sh:/usr/local/sbin/"
+        "/usr/local/sbin/vps-fw-off.sh:/usr/local/sbin/"
+        "/etc/systemd/system/vps-fw.service:/etc/systemd/system/"
         "/home/$NEW_USER/vps-health-monitor.sh:/home/$NEW_USER/"
         "/home/$NEW_USER/.zshrc:/home/$NEW_USER/"
         "/home/$NEW_USER/.zprofile:/home/$NEW_USER/"

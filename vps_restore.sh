@@ -1371,6 +1371,28 @@ setup_glances() {
     fi
 }
 
+# === Восстановление хост-файрвола публичного интерфейса (vps-fw) ===
+# Правила закрывают все порты кроме 22/80/443 и swarm с MSK; включаются при загрузке (без таймера).
+# ВНИМАНИЕ: в /usr/local/sbin/vps-fw.sh зашиты IF=ens3, HOME_IP и MSK — на новом сервере проверь
+# имя интерфейса (ip -br a) и адреса, иначе правила не защитят нужный интерфейс.
+setup_vps_fw() {
+    echo "Восстанавливаем vps-fw (файрвол публичного интерфейса)"
+
+    local base="$BACKUP_PATH/main"
+    if [ -f "$base/usr/local/sbin/vps-fw.sh" ] && [ -f "$base/etc/systemd/system/vps-fw.service" ]; then
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$base/usr/local/sbin/vps-fw.sh" \
+            "$base/usr/local/sbin/vps-fw-off.sh" \
+            root@"$DEST_HOST":/usr/local/sbin/
+        rsync -avz -e "ssh -i $SSH_KEY" \
+            "$base/etc/systemd/system/vps-fw.service" \
+            root@"$DEST_HOST":/etc/systemd/system/
+        safe_ssh root@"$DEST_HOST" "chmod +x /usr/local/sbin/vps-fw.sh /usr/local/sbin/vps-fw-off.sh && systemctl daemon-reload && systemctl enable --now vps-fw.service"
+    else
+        echo -e "${YELLOW}Файлы vps-fw не найдены в бэкапе${NC}"
+    fi
+}
+
 # === Восстановление скрипта мониторинга здоровья VPS (крон раз в минуту; лог не бэкапится) ===
 setup_vps_health_monitor() {
     echo "Восстанавливаем vps-health-monitor.sh на $DEST_HOST..."
@@ -1743,7 +1765,11 @@ main() {
         [ -z "${DEST_HOST_RU:-}" ] && { echo -e "${RED}Не задан DEST_HOST_RU в migrate.env${NC}"; exit 1; }
         restore_antizapret_ru "$DEST_HOST_RU" "$BACKUP_PATH"
         myshows_proxy_ru "$DEST_HOST_RU" "$BACKUP_PATH"
-        setup_3proxy "$DEST_HOST_RU" "$BACKUP_PATH/ru" "root"
+        if [ "${RUN_SETUP_3PROXY:-False}" = "True" ]; then
+            setup_3proxy "$DEST_HOST_RU" "$BACKUP_PATH/ru" "root"
+        else
+            echo -e "${YELLOW}=== ПРОПУСК: setup_3proxy для ru (RUN_SETUP_3PROXY != True) ===${NC}"
+        fi
         if [ "$RESTORE_TARGET" == "ru" ]; then
             print_summary
             exit 0
@@ -1778,6 +1804,7 @@ main() {
     run_if_enabled "setup_movies_go"
     run_if_enabled "setup_3proxy"
     run_if_enabled "setup_glances"
+    run_if_enabled "setup_vps_fw"
     run_if_enabled "setup_vps_health_monitor"
 
     if [ "$DEBUG" = "False" ]; then
