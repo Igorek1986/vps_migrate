@@ -1351,8 +1351,14 @@ setup_3proxy() {
         echo -e "${YELLOW}Файл конфигурации 3proxy не найден в бэкапе${NC}"
     fi
 
-    # Запускаем службу
-    safe_ssh $ssh_user@"$dest_host" "sudo systemctl start 3proxy.service && sudo systemctl enable 3proxy.service"
+    # Служба включается только при RUN_SETUP_3PROXY=True; иначе остаётся выключенной
+    # (подозрение: использование 3proxy приводит к блокировке IP со стороны ТСПУ)
+    if [ "${RUN_SETUP_3PROXY:-False}" = "True" ]; then
+        safe_ssh $ssh_user@"$dest_host" "sudo systemctl start 3proxy.service && sudo systemctl enable 3proxy.service"
+    else
+        echo -e "${YELLOW}3proxy установлен, но выключен (RUN_SETUP_3PROXY != True)${NC}"
+        safe_ssh $ssh_user@"$dest_host" "sudo systemctl disable --now 3proxy.service || true"
+    fi
 }
 
 setup_glances() {
@@ -1765,11 +1771,7 @@ main() {
         [ -z "${DEST_HOST_RU:-}" ] && { echo -e "${RED}Не задан DEST_HOST_RU в migrate.env${NC}"; exit 1; }
         restore_antizapret_ru "$DEST_HOST_RU" "$BACKUP_PATH"
         myshows_proxy_ru "$DEST_HOST_RU" "$BACKUP_PATH"
-        if [ "${RUN_SETUP_3PROXY:-False}" = "True" ]; then
-            setup_3proxy "$DEST_HOST_RU" "$BACKUP_PATH/ru" "root"
-        else
-            echo -e "${YELLOW}=== ПРОПУСК: setup_3proxy для ru (RUN_SETUP_3PROXY != True) ===${NC}"
-        fi
+        setup_3proxy "$DEST_HOST_RU" "$BACKUP_PATH/ru" "root"
         if [ "$RESTORE_TARGET" == "ru" ]; then
             print_summary
             exit 0
@@ -1802,7 +1804,7 @@ main() {
     run_if_enabled "install_go"
     run_if_enabled "setup_antizapret"
     run_if_enabled "setup_movies_go"
-    run_if_enabled "setup_3proxy"
+    setup_3proxy
     run_if_enabled "setup_glances"
     run_if_enabled "setup_vps_fw"
     run_if_enabled "setup_vps_health_monitor"
