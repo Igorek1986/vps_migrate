@@ -1379,8 +1379,8 @@ setup_glances() {
 
 # === Восстановление хост-файрвола публичного интерфейса (vps-fw) ===
 # Правила закрывают все порты кроме 22/80/443 и swarm с MSK; включаются при загрузке (без таймера).
-# ВНИМАНИЕ: в /usr/local/sbin/vps-fw.sh зашиты IF=ens3, HOME_IP и MSK — на новом сервере проверь
-# имя интерфейса (ip -br a) и адреса, иначе правила не защитят нужный интерфейс.
+# Интерфейс vps-fw.sh определяет сам (по маршруту по умолчанию); MSK = DEST_HOST_RU, HOME_IP из migrate.env
+# пишутся в /etc/vps-fw.env (пустое значение = соответствующие правила не создаются).
 setup_vps_fw() {
     echo "Восстанавливаем vps-fw (файрвол публичного интерфейса)"
 
@@ -1393,6 +1393,7 @@ setup_vps_fw() {
         rsync -avz -e "ssh -i $SSH_KEY" \
             "$base/etc/systemd/system/vps-fw.service" \
             root@"$DEST_HOST":/etc/systemd/system/
+        safe_ssh root@"$DEST_HOST" "printf 'MSK=%s\nHOME_IP=%s\n' '${DEST_HOST_RU:-}' '${HOME_IP:-}' > /etc/vps-fw.env && chmod 644 /etc/vps-fw.env"
         safe_ssh root@"$DEST_HOST" "chmod +x /usr/local/sbin/vps-fw.sh /usr/local/sbin/vps-fw-off.sh && systemctl daemon-reload && systemctl enable --now vps-fw.service"
     else
         echo -e "${YELLOW}Файлы vps-fw не найдены в бэкапе${NC}"
